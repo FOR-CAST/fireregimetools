@@ -1,0 +1,34 @@
+Package: fireregimetools
+Title: Tools for Summarizing Fire Regime Statistics From Simulations
+Version: 0.0.1
+Authors@R:
+    person(c("Alex", "M"), "Chubaty", , "achubaty@for-cast.ca", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0001-7146-8135"))
+Description: Memory-bounded, Arrow-native summaries of simulated fire regimes.
+    Per-replicate fire-size and annual-area-burned tables are written to
+    partitioned parquet and reduced across replicates by pushing the aggregation
+    down to Arrow compute (so the per-replicate rows are never all held in memory
+    at once), plus a fire-size distribution plot. Companion to nrvtools for the
+    fire side of natural-range-of-variation post-processing.
+License: Apache License (>= 2)
+URL: https://github.com/FOR-CAST/fireregimetools
+BugReports: https://github.com/FOR-CAST/fireregimetools/issues
+Depends:
+    R (>= 4.1)
+Imports:
+    arrow,
+    dplyr,
+    fs,
+    ggplot2,
+    rlang,
+    stats
+Suggests:
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0),
+    withr
+Config/testthat/edition: 3
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Config/roxygen2/version: 8.0.0
+VignetteBuilder: knitr

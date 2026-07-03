@@ -1,0 +1,86 @@
+---
+title: "Memory-bounded fire-regime summaries with fireregimetools"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Memory-bounded fire-regime summaries with fireregimetools}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 4)
+```
+
+```{r setup}
+library(fireregimetools)
+```
+
+## The workflow
+
+A fire-regime analysis runs the same landscape many times (replicates) and
+characterises how fire behaves across them. With large study areas and many
+replicates the per-event fire tables do not fit comfortably in memory all at
+once, so fireregimetools keeps the reduction memory-bounded:
+
+1. write each replicate's fire table to its own partition of an on-disk Arrow
+   dataset (`write_burn_parquet()`);
+2. open the dataset lazily (`open_burn_dataset()`) and reduce across replicates by
+   pushing the aggregation down to Arrow compute
+   (`summarize_fire_sizes()`, `summarize_annual_area()`, `fire_cycle()`), so the
+   per-record rows are never all held in memory at once;
+3. plot the fire-size distribution (`fire_size_histogram()`).
+
+## Fire sizes
+
+Write a few replicates' per-event fire-size tables, then summarise the
+across-replicate distribution:
+
+```{r fire-sizes}
+set.seed(1)
+root <- file.path(tempdir(), "fire-sizes")
+unlink(root, recursive = TRUE)
+
+for (rep_id in 1:5) {
+  events <- data.frame(
+    scenario = "hrv",
+    year = sample(1:100, 40, replace = TRUE),
+    size = rlnorm(40, meanlog = 3, sdlog = 1.5)
+  )
+  write_burn_parquet(events, root, replicate = rep_id)
+}
+
+summarize_fire_sizes(root)
+```
+
+Only the small summary is materialised in R; the per-event rows stay on disk. The
+fire-size distribution is drawn from the pooled events:
+
+```{r histogram}
+events_all <- dplyr::collect(open_burn_dataset(root))
+fire_size_histogram(events_all, size_col = "size")
+```
+
+## Annual area burned and fire cycle
+
+For a per-replicate annual-area-burned table, `summarize_annual_area()` returns
+the across-replicate envelope per time step and region, and `fire_cycle()`
+converts mean annual area burned into a landscape fire cycle (years):
+
+```{r annual}
+root2 <- file.path(tempdir(), "annual-area")
+unlink(root2, recursive = TRUE)
+
+for (rep_id in 1:5) {
+  annual <- data.frame(
+    scenario = "hrv",
+    time = rep(seq(0, 200, by = 100), each = 1),
+    region = "all",
+    area_ha = runif(3, 100, 2000)
+  )
+  write_burn_parquet(annual, root2, replicate = rep_id)
+}
+
+summarize_annual_area(root2)
+
+fire_cycle(root2, landscape_ha = 1e6)
+```
