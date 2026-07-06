@@ -2,6 +2,8 @@
 
 export(fire_cycle)
 export(fire_size_histogram)
+export(load_nbac_polys)
+export(load_nfdb_polys)
 export(open_burn_dataset)
 export(summarize_annual_area)
 export(summarize_fire_sizes)
