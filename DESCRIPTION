@@ -1,6 +1,6 @@
 Package: fireregimetools
 Title: Tools for Summarizing Fire Regime Statistics From Simulations
-Version: 0.1.0
+Version: 0.1.0.9000
 Authors@R:
     person(c("Alex", "M"), "Chubaty", , "achubaty@for-cast.ca", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0001-7146-8135"))
@@ -21,9 +21,12 @@ Imports:
     fs,
     ggplot2,
     rlang,
+    spatialutils,
     stats,
     terra,
     tidyterra
+Remotes:
+    FOR-CAST/spatialutils
 Suggests:
     knitr,
     rmarkdown,

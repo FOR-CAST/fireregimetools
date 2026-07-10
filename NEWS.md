@@ -1,3 +1,7 @@
+# fireregimetools 0.1.0.9000
+
+- `load_nbac_polys()` and `load_nfdb_polys()` now repair invalid fire-perimeter geometries (via `spatialutils::repair_geoms()`, which passes only the invalid subset to `terra::makeValid()`) instead of dropping them, recovering perimeters (e.g. ~767 of NFDB's ~41k national polygons) that were previously discarded.
+
 # fireregimetools 0.0.1
 
 - Initial release. Arrow-native, memory-bounded fire-regime summaries, consolidating the reusable fire-side post-processing logic from the `burnSummaries` module and project pipelines (companion to nrvtools).

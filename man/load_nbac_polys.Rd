@@ -25,8 +25,10 @@ to a common \code{YEAR} + \code{SIZE_HA} schema: \code{YEAR} from the NBAC year 
 \code{SIZE_HA} from the adjusted burned area (NBAC's canonical burned-area figure,
 excluding unburned islands/interior water). Both columns are detected tolerantly
 (year: \code{YEAR} or \code{FIRE_YEAR}; area: \code{ADJ_HA}, \code{POLY_HA}, or \code{HECTARES}) across
-NBAC vintages. Invalid geometries are dropped, records are filtered to
-\code{fire_years} and \code{SIZE_HA >= 1} ha, then projected + cropped to \code{study_area}.
+NBAC vintages. Invalid geometries are repaired with
+\code{\link[spatialutils:repair_geoms]{spatialutils::repair_geoms()}} (only the invalid subset is passed to
+\code{terra::makeValid()}, for speed), records are filtered to \code{fire_years} and
+\code{SIZE_HA >= 1} ha, then projected + cropped to \code{study_area}.
 }
 \details{
 NBAC perimeters are satellite-derived (best-available delineation) and span

@@ -22,8 +22,10 @@ carrying harmonised integer \code{YEAR} + numeric \code{SIZE_HA} columns.
 Loads National Fire DataBase (NFDB) fire polygons and harmonises them to the
 same \code{YEAR} + \code{SIZE_HA} schema as \code{\link[=load_nbac_polys]{load_nbac_polys()}}. The year column is
 detected tolerantly (\code{YEAR} or \code{FIRE_YEAR}) and the area column from \code{SIZE_HA},
-\code{POLY_HA}, or \code{HECTARES}. Invalid geometries are dropped, records are filtered
-to \code{fire_years} and \code{SIZE_HA >= 1} ha, then projected + cropped to \code{study_area}.
+\code{POLY_HA}, or \code{HECTARES}. Invalid geometries are repaired with
+\code{\link[spatialutils:repair_geoms]{spatialutils::repair_geoms()}} (only the invalid subset is passed to
+\code{terra::makeValid()}, for speed), records are filtered to \code{fire_years} and
+\code{SIZE_HA >= 1} ha, then projected + cropped to \code{study_area}.
 The NFDB poly record ships multiple multi-year partitions with differing
 columns, so pass all their paths together.
 }

@@ -1,9 +1,6 @@
 ## a small study-area polygon + a rasterToMatch over the same extent (EPSG:3005)
 make_sa_vect <- function() {
-  terra::vect(
-    "POLYGON ((0 0, 300 0, 300 300, 0 300, 0 0))",
-    crs = "EPSG:3005"
-  )
+  terra::vect("POLYGON ((0 0, 300 0, 300 300, 0 300, 0 0))", crs = "EPSG:3005")
 }
 make_sa_rast <- function() {
   terra::rast(make_sa_vect(), resolution = 30)
@@ -11,7 +8,13 @@ make_sa_rast <- function() {
 
 sq <- function(x0, y0, s = 100) {
   terra::vect(
-    sprintf("POLYGON ((%1$s %2$s, %3$s %2$s, %3$s %4$s, %1$s %4$s, %1$s %2$s))", x0, y0, x0 + s, y0 + s),
+    sprintf(
+      "POLYGON ((%1$s %2$s, %3$s %2$s, %3$s %4$s, %1$s %4$s, %1$s %2$s))",
+      x0,
+      y0,
+      x0 + s,
+      y0 + s
+    ),
     crs = "EPSG:3005"
   )
 }
