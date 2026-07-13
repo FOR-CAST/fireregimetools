@@ -4,7 +4,7 @@
 \alias{load_nbac_polys}
 \title{Load NBAC fire perimeters, harmonised + clipped to a study area}
 \usage{
-load_nbac_polys(nbac_shp, study_area, fire_years)
+load_nbac_polys(nbac_shp, study_area, fire_years, min_size_ha = 1)
 }
 \arguments{
 \item{nbac_shp}{Path(s) to the NBAC polygon shapefile(s).}
@@ -14,6 +14,10 @@ load_nbac_polys(nbac_shp, study_area, fire_years)
 \code{flammableMap}).}
 
 \item{fire_years}{Integer vector of fire years to keep.}
+
+\item{min_size_ha}{Minimum fire size in hectares to keep (default \code{1}); records
+with a smaller reported \code{SIZE_HA} are dropped, while records with a missing
+(\code{NA}) size are always kept.}
 }
 \value{
 A \code{SpatVector} of NBAC perimeters cropped to \code{study_area}, in its CRS,
@@ -28,7 +32,7 @@ excluding unburned islands/interior water). Both columns are detected tolerantly
 NBAC vintages. Invalid geometries are repaired with
 \code{\link[spatialutils:repair_geoms]{spatialutils::repair_geoms()}} (only the invalid subset is passed to
 \code{terra::makeValid()}, for speed), records are filtered to \code{fire_years} and
-\code{SIZE_HA >= 1} ha, then projected + cropped to \code{study_area}.
+\code{SIZE_HA >= min_size_ha}, then projected + cropped to \code{study_area}.
 }
 \details{
 NBAC perimeters are satellite-derived (best-available delineation) and span
@@ -37,7 +41,8 @@ perimeters are aerial sketches that overestimate burned area. Use
 \code{\link[=load_nfdb_polys]{load_nfdb_polys()}} only to backfill years NBAC does not cover.
 }
 \seealso{
-Other fire-perimeter loaders:
+Other fire-record loaders:
+\code{\link[=load_nfdb_points]{load_nfdb_points()}},
 \code{\link[=load_nfdb_polys]{load_nfdb_polys()}}
 }
-\concept{fire-perimeter loaders}
+\concept{fire-record loaders}

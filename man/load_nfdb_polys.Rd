@@ -4,7 +4,7 @@
 \alias{load_nfdb_polys}
 \title{Load NFDB fire polygons, harmonised + clipped to a study area}
 \usage{
-load_nfdb_polys(nfdb_shp, study_area, fire_years)
+load_nfdb_polys(nfdb_shp, study_area, fire_years, min_size_ha = 1)
 }
 \arguments{
 \item{nfdb_shp}{Character vector of NFDB polygon shapefile path(s).}
@@ -13,6 +13,10 @@ load_nfdb_polys(nfdb_shp, study_area, fire_years)
 (vector or raster), \code{sf}, \code{SpatVector}, or \code{SpatRaster}.}
 
 \item{fire_years}{Integer vector of fire years to keep.}
+
+\item{min_size_ha}{Minimum fire size in hectares to keep (default \code{1}); records
+with a smaller reported \code{SIZE_HA} are dropped, while records with a missing
+(\code{NA}) size are always kept.}
 }
 \value{
 A \code{SpatVector} of NFDB polygons cropped to \code{study_area}, in its CRS,
@@ -25,7 +29,7 @@ detected tolerantly (\code{YEAR} or \code{FIRE_YEAR}) and the area column from \
 \code{POLY_HA}, or \code{HECTARES}. Invalid geometries are repaired with
 \code{\link[spatialutils:repair_geoms]{spatialutils::repair_geoms()}} (only the invalid subset is passed to
 \code{terra::makeValid()}, for speed), records are filtered to \code{fire_years} and
-\code{SIZE_HA >= 1} ha, then projected + cropped to \code{study_area}.
+\code{SIZE_HA >= min_size_ha}, then projected + cropped to \code{study_area}.
 The NFDB poly record ships multiple multi-year partitions with differing
 columns, so pass all their paths together.
 }
@@ -34,7 +38,8 @@ Prefer NBAC (\code{\link[=load_nbac_polys]{load_nbac_polys()}}); use NFDB polygo
 does not cover.
 }
 \seealso{
-Other fire-perimeter loaders:
-\code{\link[=load_nbac_polys]{load_nbac_polys()}}
+Other fire-record loaders:
+\code{\link[=load_nbac_polys]{load_nbac_polys()}},
+\code{\link[=load_nfdb_points]{load_nfdb_points()}}
 }
-\concept{fire-perimeter loaders}
+\concept{fire-record loaders}

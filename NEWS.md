@@ -1,6 +1,8 @@
-# fireregimetools 0.1.0.9000
+# fireregimetools (development version)
 
 - `load_nbac_polys()` and `load_nfdb_polys()` now repair invalid fire-perimeter geometries (via `spatialutils::repair_geoms()`, which passes only the invalid subset to `terra::makeValid()`) instead of dropping them, recovering perimeters (e.g. ~767 of NFDB's ~41k national polygons) that were previously discarded.
+- `load_nbac_polys()`, `load_nfdb_polys()`, and `load_nfdb_points()` gain a `min_size_ha` argument (default `1`) controlling the minimum reported fire size kept; set `min_size_ha = 0` (e.g. with `load_nfdb_points()`) to retain small fires.
+- `load_nfdb_points()` loads NFDB fire-point records (fire locations + reported sizes), harmonised to the same `YEAR` + `SIZE_HA` schema and clipped to the study area as the perimeter loaders, for fire-size/count summaries that do not need mapped burned-area geometry.
 
 # fireregimetools 0.0.1
 
