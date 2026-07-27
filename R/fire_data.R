@@ -211,3 +211,66 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years, min_size_ha = 1) 
     repair = FALSE
   )
 }
+
+## Acquire a national fire archive: return the extracted file matching `pattern` in `dest`, fetching +
+## unzipping `url` only when it is not already there. The large national archives (~1 GB) are thus
+## downloaded once per `dest`; a `dest` on shared storage lets every cluster node reuse one copy.
+.download_fire_archive <- function(url, dest, pattern) {
+  dir.create(dest, showWarnings = FALSE, recursive = TRUE)
+  found <- list.files(dest, pattern = pattern, full.names = TRUE, recursive = TRUE)
+  if (length(found)) {
+    return(found[[1L]])
+  }
+  zip <- file.path(dest, basename(url))
+  if (!file.exists(zip)) {
+    utils::download.file(url, zip, mode = "wb")
+  }
+  utils::unzip(zip, exdir = dest)
+  found <- list.files(dest, pattern = pattern, full.names = TRUE, recursive = TRUE)
+  if (!length(found)) {
+    stop(
+      sprintf("no file matching '%s' after extracting %s", pattern, basename(url)),
+      call. = FALSE
+    )
+  }
+  found[[1L]]
+}
+
+#' Download + load NFDB fire points, harmonised + clipped to a study area
+#'
+#' Downloads the Canadian National Fire Database (NFDB) fire-point archive from the CWFIS open-data
+#' server, extracts it, and loads it via [load_nfdb_points()] (same `YEAR` + `SIZE_HA` harmonisation
+#' and study-area clipping, with the NFDB `CAUSE` column and other source attributes preserved). The
+#' archive is cached under `dest`: it is downloaded + extracted once, and reused on subsequent calls,
+#' so repeated runs -- and cluster workers sharing a `dest` on shared storage -- avoid re-fetching the
+#' ~1 GB file.
+#'
+#' @param study_area Study area defining the output CRS + crop extent: a file path (vector or raster),
+#'   `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation `flammableMap`).
+#' @param fire_years Integer vector of fire years to keep.
+#' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records with a smaller
+#'   reported `SIZE_HA` are dropped, while records with a missing (`NA`) size are always kept. Pass
+#'   `0` to retain all fires (e.g. when a downstream model filters by size itself).
+#' @param dest Directory to download + extract the archive into (created if needed). Defaults to a
+#'   session tempdir; point it at a persistent (ideally shared) location to cache across runs.
+#' @param url URL of the NFDB point shapefile archive (zip). `NULL` (default) uses the CWFIS
+#'   current-version archive.
+#'
+#' @returns A `SpatVector` of NFDB fire points cropped to `study_area`, as [load_nfdb_points()].
+#'
+#' @seealso [load_nfdb_points()]
+#' @family fire-record loaders
+#' @export
+fetch_nfdb_points <- function(
+  study_area,
+  fire_years,
+  min_size_ha = 1,
+  dest = file.path(tempdir(), "NFDB_point"),
+  url = NULL
+) {
+  if (is.null(url)) {
+    url <- "https://cwfis.cfs.nrcan.gc.ca/downloads/nfdb/fire_pnt/current_version/NFDB_point_shp.zip"
+  }
+  shp <- .download_fire_archive(url, dest, pattern = "NFDB_point.*\\.shp$")
+  load_nfdb_points(shp, study_area = study_area, fire_years = fire_years, min_size_ha = min_size_ha)
+}

@@ -124,3 +124,37 @@ test_that("load_nbac_polys() errors when year/size columns are absent", {
     "missing expected year/size columns"
   )
 })
+
+test_that("fetch_nfdb_points() reuses an already-extracted archive (no download)", {
+  p <- pts(x = c(50, 250), y = c(50, 50), YEAR = c(2010L, 1990L), SIZE_HA = c(3, 4))
+  dest <- withr::local_tempdir()
+  terra::writeVector(p, file.path(dest, "NFDB_point_20250101.shp"), overwrite = TRUE)
+
+  ## the .shp is already in `dest`, so fetch must load it WITHOUT touching `url` (which is unreachable)
+  out <- fetch_nfdb_points(
+    make_sa_vect(),
+    fire_years = 2000:2020,
+    dest = dest,
+    url = "https://example.invalid/NFDB_point_shp.zip"
+  )
+  expect_s4_class(out, "SpatVector")
+  expect_equal(terra::geomtype(out), "points")
+  expect_equal(out$YEAR, 2010L) # 1990 filtered out
+  expect_equal(out$SIZE_HA, 3)
+})
+
+test_that("fetch_nfdb_points() extracts a cached zip archive", {
+  skip_if(!nzchar(Sys.which("zip")), "no `zip` binary")
+  p <- pts(x = c(50, 250), y = c(50, 50), YEAR = c(2010L, 1990L), SIZE_HA = c(3, 4))
+  shpdir <- withr::local_tempdir()
+  terra::writeVector(p, file.path(shpdir, "NFDB_point_20250101.shp"), overwrite = TRUE)
+
+  dest <- withr::local_tempdir()
+  url <- "https://example.invalid/NFDB_point_shp.zip"
+  withr::with_dir(shpdir, utils::zip(file.path(dest, basename(url)), list.files(), flags = "-q"))
+
+  ## no .shp in `dest`, but the zip is -> fetch unzips it (no download) then loads
+  out <- fetch_nfdb_points(make_sa_vect(), fire_years = 2000:2020, dest = dest, url = url)
+  expect_s4_class(out, "SpatVector")
+  expect_equal(out$YEAR, 2010L)
+})

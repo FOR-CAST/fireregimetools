@@ -44,6 +44,7 @@ set \code{min_size_ha = 0} (the default \code{1} ha floor matches the perimeter 
 }
 \seealso{
 Other fire-record loaders:
+\code{\link[=fetch_nfdb_points]{fetch_nfdb_points()}},
 \code{\link[=load_nbac_polys]{load_nbac_polys()}},
 \code{\link[=load_nfdb_polys]{load_nfdb_polys()}}
 }

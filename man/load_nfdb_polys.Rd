@@ -39,6 +39,7 @@ does not cover.
 }
 \seealso{
 Other fire-record loaders:
+\code{\link[=fetch_nfdb_points]{fetch_nfdb_points()}},
 \code{\link[=load_nbac_polys]{load_nbac_polys()}},
 \code{\link[=load_nfdb_points]{load_nfdb_points()}}
 }
