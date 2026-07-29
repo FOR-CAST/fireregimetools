@@ -6,7 +6,7 @@
 \usage{
 fetch_nfdb_points(
   study_area,
-  fire_years,
+  fire_years = NULL,
   min_size_ha = 1,
   dest = file.path(tempdir(), "NFDB_point"),
   url = NULL
@@ -16,7 +16,7 @@ fetch_nfdb_points(
 \item{study_area}{Study area defining the output CRS + crop extent: a file path (vector or raster),
 \code{sf}, \code{SpatVector}, or \code{SpatRaster} (e.g. a simulation \code{flammableMap}).}
 
-\item{fire_years}{Integer vector of fire years to keep.}
+\item{fire_years}{Integer vector of fire years to keep; \code{NULL} (default) keeps all years.}
 
 \item{min_size_ha}{Minimum fire size in hectares to keep (default \code{1}); records with a smaller
 reported \code{SIZE_HA} are dropped, while records with a missing (\code{NA}) size are always kept. Pass

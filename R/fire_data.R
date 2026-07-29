@@ -38,7 +38,7 @@
 .load_fire_vect <- function(
   shp,
   study_area,
-  fire_years,
+  fire_years = NULL,
   year_cols,
   size_cols,
   size_required,
@@ -74,11 +74,10 @@
     YEAR = as.integer(.data[[year_col]]),
     SIZE_HA = if (is.na(size_col)) NA_real_ else as.numeric(.data[[size_col]])
   )
-  p <- tidyterra::filter(
-    p,
-    .data$YEAR %in% !!fire_years,
-    is.na(.data$SIZE_HA) | .data$SIZE_HA >= !!min_size_ha
-  )
+  if (!is.null(fire_years)) {
+    p <- tidyterra::filter(p, .data$YEAR %in% !!fire_years)
+  }
+  p <- tidyterra::filter(p, is.na(.data$SIZE_HA) | .data$SIZE_HA >= !!min_size_ha)
   p <- terra::project(p, terra::crs(sa))
   terra::crop(p, sa) ## clip to the study-area extent
 }
@@ -104,7 +103,7 @@
 #' @param study_area Study area defining the output CRS + crop extent: a file path
 #'   (vector or raster), `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation
 #'   `flammableMap`).
-#' @param fire_years Integer vector of fire years to keep.
+#' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
 #'   (`NA`) size are always kept.
@@ -114,7 +113,7 @@
 #'
 #' @family fire-record loaders
 #' @export
-load_nbac_polys <- function(nbac_shp, study_area, fire_years, min_size_ha = 1) {
+load_nbac_polys <- function(nbac_shp, study_area, fire_years = NULL, min_size_ha = 1) {
   .load_fire_vect(
     nbac_shp,
     study_area,
@@ -144,7 +143,7 @@ load_nbac_polys <- function(nbac_shp, study_area, fire_years, min_size_ha = 1) {
 #' @param nfdb_shp Character vector of NFDB polygon shapefile path(s).
 #' @param study_area Study area defining the output CRS + crop extent: a file path
 #'   (vector or raster), `sf`, `SpatVector`, or `SpatRaster`.
-#' @param fire_years Integer vector of fire years to keep.
+#' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
 #'   (`NA`) size are always kept.
@@ -154,7 +153,7 @@ load_nbac_polys <- function(nbac_shp, study_area, fire_years, min_size_ha = 1) {
 #'
 #' @family fire-record loaders
 #' @export
-load_nfdb_polys <- function(nfdb_shp, study_area, fire_years, min_size_ha = 1) {
+load_nfdb_polys <- function(nfdb_shp, study_area, fire_years = NULL, min_size_ha = 1) {
   .load_fire_vect(
     nfdb_shp,
     study_area,
@@ -189,7 +188,7 @@ load_nfdb_polys <- function(nfdb_shp, study_area, fire_years, min_size_ha = 1) {
 #'   single `NFDB_point` shapefile).
 #' @param study_area Study area defining the output CRS + crop extent: a file path
 #'   (vector or raster), `sf`, `SpatVector`, or `SpatRaster`.
-#' @param fire_years Integer vector of fire years to keep.
+#' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
 #'   (`NA`) size are always kept. Set to `0` to keep all reported fire sizes.
@@ -199,7 +198,7 @@ load_nfdb_polys <- function(nfdb_shp, study_area, fire_years, min_size_ha = 1) {
 #'
 #' @family fire-record loaders
 #' @export
-load_nfdb_points <- function(nfdb_shp, study_area, fire_years, min_size_ha = 1) {
+load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_ha = 1) {
   .load_fire_vect(
     nfdb_shp,
     study_area,
@@ -247,7 +246,7 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years, min_size_ha = 1) 
 #'
 #' @param study_area Study area defining the output CRS + crop extent: a file path (vector or raster),
 #'   `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation `flammableMap`).
-#' @param fire_years Integer vector of fire years to keep.
+#' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records with a smaller
 #'   reported `SIZE_HA` are dropped, while records with a missing (`NA`) size are always kept. Pass
 #'   `0` to retain all fires (e.g. when a downstream model filters by size itself).
@@ -263,7 +262,7 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years, min_size_ha = 1) 
 #' @export
 fetch_nfdb_points <- function(
   study_area,
-  fire_years,
+  fire_years = NULL,
   min_size_ha = 1,
   dest = file.path(tempdir(), "NFDB_point"),
   url = NULL

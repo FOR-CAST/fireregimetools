@@ -4,7 +4,7 @@
 \alias{load_nfdb_points}
 \title{Load NFDB fire points, harmonised + clipped to a study area}
 \usage{
-load_nfdb_points(nfdb_shp, study_area, fire_years, min_size_ha = 1)
+load_nfdb_points(nfdb_shp, study_area, fire_years = NULL, min_size_ha = 1)
 }
 \arguments{
 \item{nfdb_shp}{Character vector of NFDB point shapefile path(s) (typically the
@@ -13,7 +13,7 @@ single \code{NFDB_point} shapefile).}
 \item{study_area}{Study area defining the output CRS + crop extent: a file path
 (vector or raster), \code{sf}, \code{SpatVector}, or \code{SpatRaster}.}
 
-\item{fire_years}{Integer vector of fire years to keep.}
+\item{fire_years}{Integer vector of fire years to keep; \code{NULL} (default) keeps all years.}
 
 \item{min_size_ha}{Minimum fire size in hectares to keep (default \code{1}); records
 with a smaller reported \code{SIZE_HA} are dropped, while records with a missing

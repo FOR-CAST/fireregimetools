@@ -1,5 +1,6 @@
 # fireregimetools (development version)
 
+- The fire-record loaders (`load_nbac_polys()`, `load_nfdb_polys()`, `load_nfdb_points()`) and `fetch_nfdb_points()` now accept `fire_years = NULL` (the new default) to keep all years, instead of requiring an explicit year vector; pass a vector to filter. This lets callers that filter years themselves (e.g. scfm's fire-regime prep) fetch the full record in one call.
 - `fetch_nfdb_points()` downloads the CWFIS National Fire Database (NFDB) fire-point archive, extracts it (caching under `dest`, so the ~1 GB archive is fetched once per location and reusable across cluster nodes), and loads it via `load_nfdb_points()` -- a single canonical NFDB fetch-and-load, replacing bespoke per-project downloaders.
 - `load_nbac_polys()` and `load_nfdb_polys()` now repair invalid fire-perimeter geometries (via `spatialutils::repair_geoms()`, which passes only the invalid subset to `terra::makeValid()`) instead of dropping them, recovering perimeters (e.g. ~767 of NFDB's ~41k national polygons) that were previously discarded.
 - `load_nbac_polys()`, `load_nfdb_polys()`, and `load_nfdb_points()` gain a `min_size_ha` argument (default `1`) controlling the minimum reported fire size kept; set `min_size_ha = 0` (e.g. with `load_nfdb_points()`) to retain small fires.

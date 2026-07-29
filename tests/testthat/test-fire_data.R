@@ -98,6 +98,21 @@ test_that("load_nfdb_points() min_size_ha controls the small-fire cutoff", {
   )
 })
 
+test_that("fire_years = NULL keeps all years (no year filter)", {
+  p <- pts(
+    x = c(50, 150, 250),
+    y = c(50, 50, 50),
+    YEAR = c(1985L, 2005L, 2020L),
+    SIZE_HA = c(3, 4, 5)
+  )
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(p, f, overwrite = TRUE)
+
+  ## default fire_years = NULL -> no year filter; all three survive
+  out <- load_nfdb_points(f, make_sa_vect())
+  expect_setequal(out$YEAR, c(1985L, 2005L, 2020L))
+})
+
 test_that("load_nfdb_points() projects + crops to the study area", {
   p <- pts(
     x = c(50, 500), # 500 is outside the 0-300 study-area extent
