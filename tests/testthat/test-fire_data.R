@@ -304,9 +304,13 @@ test_that("records without a CRS name the offending file", {
   nfdb <- sq(0, 0)
   nfdb$YEAR <- 2010L
   nfdb$SIZE_HA <- 5
-  terra::crs(nfdb) <- ""
-  f <- withr::local_tempfile(fileext = ".gpkg")
+  ## a shapefile with its .prj removed, NOT a CRS-less GPKG: GPKG always records an SRS entry, and
+  ## what an undefined one reads back as varies with the GDAL/PROJ build
+  dir <- withr::local_tempdir()
+  f <- file.path(dir, "NFDB_poly_nocrs.shp")
   terra::writeVector(nfdb, f, overwrite = TRUE)
+  unlink(file.path(dir, "NFDB_poly_nocrs.prj"))
+  expect_equal(terra::crs(terra::vect(f)), "") # the fixture is only useful if this holds
 
   expect_error(load_nfdb_polys(f, make_sa_vect()), "fire records have no CRS")
 })
