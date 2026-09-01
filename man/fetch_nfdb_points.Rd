@@ -33,16 +33,23 @@ A \code{SpatVector} of NFDB fire points cropped to \code{study_area}, as \code{\
 }
 \description{
 Downloads the Canadian National Fire Database (NFDB) fire-point archive from the CWFIS open-data
-server, extracts it, and loads it via \code{\link[=load_nfdb_points]{load_nfdb_points()}} (same \code{YEAR} + \code{SIZE_HA} harmonisation
-and study-area clipping, with the NFDB \code{CAUSE} column and other source attributes preserved). The
-archive is cached under \code{dest}: it is downloaded + extracted once, and reused on subsequent calls,
-so repeated runs -- and cluster workers sharing a \code{dest} on shared storage -- avoid re-fetching the
-~1 GB file.
+server (~42 MB), extracts it, and loads it via \code{\link[=load_nfdb_points]{load_nfdb_points()}} (same \code{YEAR} + \code{SIZE_HA}
+harmonisation and study-area clipping, with the NFDB \code{CAUSE} column and other source attributes
+preserved).
+}
+\details{
+The archive is downloaded + extracted once per \code{dest} and reused afterwards, so repeated runs --
+and concurrent workers sharing a \code{dest} on shared storage, which coordinate via a lock -- do not
+re-fetch it. A cached extraction is reused only once it has been verified complete against the
+archive's own manifest, since a download or extraction interrupted partway leaves plausible-looking
+short files behind that a reader will happily accept.
 }
 \seealso{
 \code{\link[=load_nfdb_points]{load_nfdb_points()}}
 
 Other fire-record loaders:
+\code{\link[=fetch_nbac_polys]{fetch_nbac_polys()}},
+\code{\link[=fetch_nfdb_polys]{fetch_nfdb_polys()}},
 \code{\link[=load_nbac_polys]{load_nbac_polys()}},
 \code{\link[=load_nfdb_points]{load_nfdb_points()}},
 \code{\link[=load_nfdb_polys]{load_nfdb_polys()}}

@@ -173,3 +173,105 @@ test_that("fetch_nfdb_points() extracts a cached zip archive", {
   expect_s4_class(out, "SpatVector")
   expect_equal(out$YEAR, 2010L)
 })
+
+## zip the contents of `dir` (flat, as the CWFIS archives are) into the absolute path `zipfile`
+zip_dir <- function(dir, zipfile) {
+  withr::with_dir(dir, utils::zip(zipfile, list.files(), flags = "-q"))
+  zipfile
+}
+
+## two NFDB-style polygon partitions, as the poly record actually ships
+write_poly_partitions <- function(dir) {
+  a <- sq(0, 0)
+  a$YEAR <- 1985L
+  a$SIZE_HA <- 5
+  b <- sq(120, 0)
+  b$YEAR <- 2022L
+  b$SIZE_HA <- 8
+  terra::writeVector(a, file.path(dir, "NFDB_poly_1972to2020_20240101.shp"), overwrite = TRUE)
+  terra::writeVector(b, file.path(dir, "NFDB_poly_2021to2024_20250101.shp"), overwrite = TRUE)
+  invisible(dir)
+}
+
+test_that("fetch_nfdb_polys() binds every partition in the archive, not just the first", {
+  skip_if(!nzchar(Sys.which("zip")), "no `zip` binary")
+  src <- withr::local_tempdir()
+  write_poly_partitions(src)
+  dest <- withr::local_tempdir()
+  url <- "https://example.invalid/NFDB_poly.zip"
+  zip_dir(src, file.path(dest, basename(url)))
+
+  out <- fetch_nfdb_polys(make_sa_vect(), dest = dest, url = url)
+  expect_setequal(out$YEAR, c(1985L, 2022L))
+  expect_setequal(out$SIZE_HA, c(5, 8))
+})
+
+test_that("a verified extraction is stamped and reused", {
+  skip_if(!nzchar(Sys.which("zip")), "no `zip` binary")
+  src <- withr::local_tempdir()
+  write_poly_partitions(src)
+  dest <- withr::local_tempdir()
+  url <- "https://example.invalid/NFDB_poly.zip"
+  zip_dir(src, file.path(dest, basename(url)))
+
+  fetch_nfdb_polys(make_sa_vect(), dest = dest, url = url)
+  stamp <- file.path(dest, ".NFDB_poly.zip.complete")
+  expect_true(file.exists(stamp))
+
+  ## the stamp short-circuits verification: an unreadable archive is never consulted again
+  writeLines("not a zip", file.path(dest, basename(url)))
+  out <- fetch_nfdb_polys(make_sa_vect(), dest = dest, url = url)
+  expect_setequal(out$YEAR, c(1985L, 2022L))
+})
+
+test_that("a truncated extraction is re-extracted, not accepted", {
+  skip_if(!nzchar(Sys.which("zip")), "no `zip` binary")
+  src <- withr::local_tempdir()
+  write_poly_partitions(src)
+  dest <- withr::local_tempdir()
+  url <- "https://example.invalid/NFDB_poly.zip"
+  zip_dir(src, file.path(dest, basename(url)))
+
+  fetch_nfdb_polys(make_sa_vect(), dest = dest, url = url)
+  truncated <- file.path(dest, "NFDB_poly_2021to2024_20250101.dbf")
+  full_size <- file.size(truncated)
+  writeBin(raw(8), truncated)
+  unlink(file.path(dest, ".NFDB_poly.zip.complete")) # as if the earlier run had been interrupted
+
+  out <- fetch_nfdb_polys(make_sa_vect(), dest = dest, url = url)
+  expect_equal(file.size(truncated), full_size)
+  expect_setequal(out$YEAR, c(1985L, 2022L))
+})
+
+test_that("a truncated archive is re-downloaded rather than extracted", {
+  skip_if(!nzchar(Sys.which("zip")), "no `zip` binary")
+  src <- withr::local_tempdir()
+  write_poly_partitions(src)
+  upstream <- withr::local_tempdir()
+  good_zip <- zip_dir(src, file.path(upstream, "NFDB_poly.zip"))
+  url <- paste0("file://", normalizePath(good_zip))
+
+  dest <- withr::local_tempdir()
+  ## a partial download from an earlier run: right name, unreadable central directory
+  writeBin(readBin(good_zip, "raw", 512L), file.path(dest, "NFDB_poly.zip"))
+
+  out <- fetch_nfdb_polys(make_sa_vect(), dest = dest, url = url)
+  expect_setequal(out$YEAR, c(1985L, 2022L))
+  expect_equal(file.size(file.path(dest, "NFDB_poly.zip")), file.size(good_zip))
+})
+
+test_that("fetch_nbac_polys() reuses an already-extracted archive (no download)", {
+  nbac <- sq(0, 0)
+  nbac$YEAR <- 2005L
+  nbac$ADJ_HA <- 10
+  dest <- withr::local_tempdir()
+  terra::writeVector(nbac, file.path(dest, "NBAC_1972to2025_20260513.shp"), overwrite = TRUE)
+
+  out <- fetch_nbac_polys(
+    make_sa_vect(),
+    dest = dest,
+    url = "https://example.invalid/NBAC_1972to2025_20260513_shp.zip"
+  )
+  expect_equal(out$YEAR, 2005L)
+  expect_equal(out$SIZE_HA, 10)
+})

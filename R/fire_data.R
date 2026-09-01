@@ -211,38 +211,268 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_h
   )
 }
 
-## Acquire a national fire archive: return the extracted file matching `pattern` in `dest`, fetching +
-## unzipping `url` only when it is not already there. The large national archives (~1 GB) are thus
-## downloaded once per `dest`; a `dest` on shared storage lets every cluster node reuse one copy.
-.download_fire_archive <- function(url, dest, pattern) {
-  dir.create(dest, showWarnings = FALSE, recursive = TRUE)
-  found <- list.files(dest, pattern = pattern, full.names = TRUE, recursive = TRUE)
-  if (length(found)) {
-    return(found[[1L]])
+## --- Archive acquisition -------------------------------------------------------------------------
+##
+## The national fire archives are large (NFDB points ~42 MB, NFDB polygons ~780 MB, NBAC ~1.2 GB) and
+## are served as plain HTTP downloads, which fail in two SILENT ways this code defends against:
+##
+##   1. a transfer that exceeds R's default 60 s `download.file` timeout is truncated, not errored; and
+##   2. an interrupted extraction leaves a SHORT file behind, which an existence-only cache check then
+##      accepts on every later run, permanently.
+##
+## Both bit us together in 2026: the 1.88 GB NBAC `.shp` sat at 567 MB, GDAL logged 74,178 read
+## errors, and the reader still returned the full feature count (the `.shx` index was intact), so a
+## whole set of historic fire summaries was built from ~30% of the record with nothing failing.
+##
+## So: the timeout is raised, the download is staged through a `.part` file and renamed only on
+## success, the extraction is staged in a private directory and verified against the archive manifest
+## before being published into `dest`, and a stamp file records that a verified extraction happened.
+
+## Marker written only after an extraction has been verified complete.
+.fire_archive_stamp <- function(dest, url) {
+  file.path(dest, paste0(".", basename(url), ".complete"))
+}
+
+## Extracted files matching `pattern`, sorted. `list.files()` skips dotfiles, so the stamp, lock and
+## staging directories used below are invisible here by construction. The top level of `dest` is
+## preferred and subdirectories are searched only if nothing matches there: `dest` is often a shared
+## inputs directory, and a recursive match can otherwise reach an older copy of the same record
+## nested somewhere under it -- while an archive that extracts into a folder of its own still works.
+.fire_archive_files <- function(dest, pattern) {
+  found <- list.files(dest, pattern = pattern, full.names = TRUE)
+  if (!length(found)) {
+    found <- list.files(dest, pattern = pattern, full.names = TRUE, recursive = TRUE)
+  }
+  sort(found)
+}
+
+## Read a zip's central directory (member `Name` + `Length`). The central directory lives at the END
+## of the file, so a truncated archive cannot be listed -- making this an integrity check on the zip
+## itself, not just a manifest. `utils::unzip(list = TRUE)` is the primary reader, with libarchive as
+## a fallback for zip64 archives it cannot parse; but `archive::archive()` reports every size as 0
+## when `options(encoding = "UTF-8")` is set, so an all-zero manifest is treated as unusable rather
+## than as "every member is empty". Returns NULL when no usable manifest can be read.
+.fire_archive_manifest <- function(zip) {
+  m <- tryCatch(suppressWarnings(utils::unzip(zip, list = TRUE)), error = function(e) NULL)
+  if (is.null(m) && requireNamespace("archive", quietly = TRUE)) {
+    m <- tryCatch(
+      {
+        a <- archive::archive(zip)
+        data.frame(Name = as.character(a$path), Length = as.numeric(a$size))
+      },
+      error = function(e) NULL
+    )
+  }
+  if (!is.null(m) && (!nrow(m) || all(m$Length == 0))) {
+    m <- NULL
+  }
+  m
+}
+
+## Members of `manifest` that are missing from `dir` or shorter than the archive says they should be
+## (empty when the extraction is intact, or when there is no manifest to check against).
+.fire_archive_shortfall <- function(dir, manifest) {
+  if (is.null(manifest)) {
+    return(character(0))
+  }
+  keep <- !grepl("/$", manifest$Name)
+  nms <- manifest$Name[keep]
+  want <- as.numeric(manifest$Length[keep])
+  got <- file.size(file.path(dir, nms))
+  nms[is.na(got) | got != want]
+}
+
+## Already-extracted files in `dest`, but only when the extraction is trustworthy: this function
+## verified it earlier (the stamp), or the archive is still present to verify against now. "A file
+## with the right name exists" is exactly the check that accepted a 30%-complete NBAC shapefile, so
+## it is not sufficient on its own -- except for files a user placed in `dest` by hand, where there is
+## no archive to check against and honouring them is the point; those are accepted with a note.
+.fire_archive_cached <- function(dest, url, pattern) {
+  found <- .fire_archive_files(dest, pattern)
+  if (!length(found)) {
+    return(character(0))
+  }
+  stamp <- .fire_archive_stamp(dest, url)
+  if (file.exists(stamp)) {
+    return(found)
   }
   zip <- file.path(dest, basename(url))
   if (!file.exists(zip)) {
-    utils::download.file(url, zip, mode = "wb")
+    message(
+      "using existing files in ",
+      dest,
+      " matching '",
+      pattern,
+      "' (no archive present to verify them against)"
+    )
+    return(found)
   }
-  utils::unzip(zip, exdir = dest)
-  found <- list.files(dest, pattern = pattern, full.names = TRUE, recursive = TRUE)
+  manifest <- .fire_archive_manifest(zip)
+  if (is.null(manifest) || length(.fire_archive_shortfall(dest, manifest))) {
+    return(character(0)) ## incomplete (or unverifiable) -- re-extract below
+  }
+  try(writeLines(format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"), stamp), silent = TRUE)
+  found
+}
+
+## Download `url` to `zip` unless a readable (i.e. non-truncated) copy is already there. Staged
+## through a process-private `.part` file and renamed only on success, so an interrupted transfer is
+## never mistaken for a complete one; the timeout is raised for the multi-hundred-MB archives and R's
+## truncation warning is promoted to an error.
+.fire_archive_download <- function(url, zip) {
+  if (file.exists(zip)) {
+    if (!is.null(.fire_archive_manifest(zip))) {
+      return(zip)
+    }
+    message("existing archive is unreadable or incomplete; re-downloading: ", zip)
+    unlink(zip)
+  }
+
+  old_timeout <- getOption("timeout")
+  on.exit(options(timeout = old_timeout), add = TRUE)
+  options(timeout = max(3600L, old_timeout))
+
+  part <- sprintf("%s.part-%d", zip, Sys.getpid())
+  ok <- FALSE
+  on.exit(if (!ok) unlink(part), add = TRUE)
+  status <- withCallingHandlers(
+    utils::download.file(url, part, mode = "wb"),
+    warning = function(w) {
+      if (grepl("downloaded length", conditionMessage(w), fixed = TRUE)) {
+        stop("download of ", url, " was truncated: ", conditionMessage(w), call. = FALSE)
+      }
+    }
+  )
+  if (!identical(as.integer(status), 0L)) {
+    stop("download of ", url, " failed with status ", status, call. = FALSE)
+  }
+  if (!file.rename(part, zip)) {
+    stop("unable to move the downloaded archive into place at ", zip, call. = FALSE)
+  }
+  ok <- TRUE
+  zip
+}
+
+## Extract with libarchive when available (it handles zip64 and members that R's internal unzip
+## cannot), else `utils::unzip()`, whose warnings are promoted to errors so a failed extraction is
+## never silently accepted. Paths are absolute because `archive_extract()` changes directory.
+.fire_archive_extract <- function(zip, exdir) {
+  dir.create(exdir, showWarnings = FALSE, recursive = TRUE)
+  exdir <- normalizePath(exdir, mustWork = TRUE)
+  zip <- normalizePath(zip, mustWork = TRUE)
+  if (requireNamespace("archive", quietly = TRUE)) {
+    extracted <- tryCatch(
+      {
+        archive::archive_extract(zip, dir = exdir)
+        TRUE
+      },
+      error = function(e) FALSE
+    )
+    if (extracted) {
+      return(invisible(exdir))
+    }
+  }
+  withCallingHandlers(utils::unzip(zip, exdir = exdir), warning = function(w) {
+    stop("extraction of ", basename(zip), " failed: ", conditionMessage(w), call. = FALSE)
+  })
+  invisible(exdir)
+}
+
+## Move a verified extraction from `staging` into `dest`. Rename is atomic within a filesystem
+## (`staging` is a subdirectory of `dest`, so it always is), which is what makes publishing safe
+## while another process is reading `dest`.
+.fire_archive_publish <- function(staging, dest) {
+  rel <- list.files(staging, recursive = TRUE, all.files = TRUE, no.. = TRUE)
+  for (f in rel) {
+    src <- file.path(staging, f)
+    tgt <- file.path(dest, f)
+    dir.create(dirname(tgt), showWarnings = FALSE, recursive = TRUE)
+    if (!file.rename(src, tgt)) {
+      if (!file.copy(src, tgt, overwrite = TRUE)) {
+        stop("unable to move extracted file into place: ", tgt, call. = FALSE)
+      }
+      unlink(src)
+    }
+  }
+  invisible(dest)
+}
+
+## Acquire a national fire archive: return ALL extracted files matching `pattern` in `dest` (the NFDB
+## polygon record ships several multi-year partitions, which the loaders bind together), downloading
+## and extracting `url` only when a verified copy is not already there.
+##
+## `dest` may be shared by concurrent workers, so one of them takes a lock (an atomically created
+## directory) and the others wait rather than each pulling a multi-hundred-MB copy. A worker that
+## dies leaves its lock behind, so the wait is bounded by `lock_timeout` seconds; on timeout we fetch
+## too, which is safe because extraction is staged privately and published file-by-file.
+.download_fire_archive <- function(url, dest, pattern, lock_timeout = 3600) {
+  dir.create(dest, showWarnings = FALSE, recursive = TRUE)
+  found <- .fire_archive_cached(dest, url, pattern)
+  if (length(found)) {
+    return(found)
+  }
+
+  lock <- file.path(dest, paste0(".", basename(url), ".lock"))
+  if (dir.create(lock, showWarnings = FALSE)) {
+    on.exit(unlink(lock, recursive = TRUE), add = TRUE)
+  } else {
+    message("waiting for another process to fetch ", basename(url), " ...")
+    waited <- 0
+    while (dir.exists(lock) && waited < lock_timeout) {
+      Sys.sleep(5)
+      waited <- waited + 5
+    }
+    found <- .fire_archive_cached(dest, url, pattern)
+    if (length(found)) {
+      return(found)
+    }
+  }
+
+  zip <- .fire_archive_download(url, file.path(dest, basename(url)))
+  manifest <- .fire_archive_manifest(zip)
+  staging <- file.path(dest, sprintf(".staging-%d-%s", Sys.getpid(), basename(tempfile(""))))
+  on.exit(unlink(staging, recursive = TRUE), add = TRUE)
+  .fire_archive_extract(zip, staging)
+  short <- .fire_archive_shortfall(staging, manifest)
+  if (length(short)) {
+    stop(
+      sprintf(
+        "extraction of %s is incomplete: %d file(s) missing or short (e.g. %s)",
+        basename(url),
+        length(short),
+        paste(utils::head(short, 3L), collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  .fire_archive_publish(staging, dest)
+  try(
+    writeLines(format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"), .fire_archive_stamp(dest, url)),
+    silent = TRUE
+  )
+
+  found <- .fire_archive_files(dest, pattern)
   if (!length(found)) {
     stop(
       sprintf("no file matching '%s' after extracting %s", pattern, basename(url)),
       call. = FALSE
     )
   }
-  found[[1L]]
+  found
 }
 
 #' Download + load NFDB fire points, harmonised + clipped to a study area
 #'
 #' Downloads the Canadian National Fire Database (NFDB) fire-point archive from the CWFIS open-data
-#' server, extracts it, and loads it via [load_nfdb_points()] (same `YEAR` + `SIZE_HA` harmonisation
-#' and study-area clipping, with the NFDB `CAUSE` column and other source attributes preserved). The
-#' archive is cached under `dest`: it is downloaded + extracted once, and reused on subsequent calls,
-#' so repeated runs -- and cluster workers sharing a `dest` on shared storage -- avoid re-fetching the
-#' ~1 GB file.
+#' server (~42 MB), extracts it, and loads it via [load_nfdb_points()] (same `YEAR` + `SIZE_HA`
+#' harmonisation and study-area clipping, with the NFDB `CAUSE` column and other source attributes
+#' preserved).
+#'
+#' The archive is downloaded + extracted once per `dest` and reused afterwards, so repeated runs --
+#' and concurrent workers sharing a `dest` on shared storage, which coordinate via a lock -- do not
+#' re-fetch it. A cached extraction is reused only once it has been verified complete against the
+#' archive's own manifest, since a download or extraction interrupted partway leaves plausible-looking
+#' short files behind that a reader will happily accept.
 #'
 #' @param study_area Study area defining the output CRS + crop extent: a file path (vector or raster),
 #'   `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation `flammableMap`).
@@ -272,4 +502,71 @@ fetch_nfdb_points <- function(
   }
   shp <- .download_fire_archive(url, dest, pattern = "NFDB_point.*\\.shp$")
   load_nfdb_points(shp, study_area = study_area, fire_years = fire_years, min_size_ha = min_size_ha)
+}
+
+#' Download + load NFDB fire polygons, harmonised + clipped to a study area
+#'
+#' Downloads the Canadian National Fire Database (NFDB) fire-polygon archive from the CWFIS open-data
+#' server (~780 MB), extracts it, and loads it via [load_nfdb_polys()]. The record ships as several
+#' multi-year partitions with differing columns; all of them are passed to the loader together, which
+#' binds them. Caching, verification and concurrent-worker behaviour are as for [fetch_nfdb_points()].
+#'
+#' Prefer NBAC ([fetch_nbac_polys()]); use NFDB polygons only to backfill years NBAC does not cover.
+#'
+#' @inheritParams fetch_nfdb_points
+#' @param url URL of the NFDB polygon shapefile archive (zip). `NULL` (default) uses the CWFIS
+#'   current-version archive.
+#'
+#' @returns A `SpatVector` of NFDB polygons cropped to `study_area`, as [load_nfdb_polys()].
+#'
+#' @seealso [load_nfdb_polys()]
+#' @family fire-record loaders
+#' @export
+fetch_nfdb_polys <- function(
+  study_area,
+  fire_years = NULL,
+  min_size_ha = 1,
+  dest = file.path(tempdir(), "NFDB_poly"),
+  url = NULL
+) {
+  if (is.null(url)) {
+    url <- "https://cwfis.cfs.nrcan.gc.ca/downloads/nfdb/fire_poly/current_version/NFDB_poly.zip"
+  }
+  shp <- .download_fire_archive(url, dest, pattern = "NFDB_poly_.*\\.shp$")
+  load_nfdb_polys(shp, study_area = study_area, fire_years = fire_years, min_size_ha = min_size_ha)
+}
+
+#' Download + load NBAC fire perimeters, harmonised + clipped to a study area
+#'
+#' Downloads the National Burned Area Composite (NBAC) archive from the CWFIS open-data server
+#' (~1.2 GB), extracts it, and loads it via [load_nbac_polys()]. Caching, verification and
+#' concurrent-worker behaviour are as for [fetch_nfdb_points()].
+#'
+#' Unlike the NFDB archives, which live at a mutable `current_version/` path, NBAC releases carry a
+#' date in the filename. The default `url` therefore pins a specific release rather than tracking the
+#' newest one, so a pipeline re-run fetches the same data; pass `url` to move to a newer release
+#' deliberately (the available releases are listed at
+#' <https://cwfis.cfs.nrcan.gc.ca/downloads/nbac/>).
+#'
+#' @inheritParams fetch_nfdb_points
+#' @param url URL of the NBAC shapefile archive (zip). `NULL` (default) uses the pinned release
+#'   described above.
+#'
+#' @returns A `SpatVector` of NBAC perimeters cropped to `study_area`, as [load_nbac_polys()].
+#'
+#' @seealso [load_nbac_polys()]
+#' @family fire-record loaders
+#' @export
+fetch_nbac_polys <- function(
+  study_area,
+  fire_years = NULL,
+  min_size_ha = 1,
+  dest = file.path(tempdir(), "NBAC"),
+  url = NULL
+) {
+  if (is.null(url)) {
+    url <- "https://cwfis.cfs.nrcan.gc.ca/downloads/nbac/NBAC_1972to2025_20260513_shp.zip"
+  }
+  shp <- .download_fire_archive(url, dest, pattern = "NBAC_.*\\.shp$")
+  load_nbac_polys(shp, study_area = study_area, fire_years = fire_years, min_size_ha = min_size_ha)
 }

@@ -42,7 +42,9 @@ perimeters are aerial sketches that overestimate burned area. Use
 }
 \seealso{
 Other fire-record loaders:
+\code{\link[=fetch_nbac_polys]{fetch_nbac_polys()}},
 \code{\link[=fetch_nfdb_points]{fetch_nfdb_points()}},
+\code{\link[=fetch_nfdb_polys]{fetch_nfdb_polys()}},
 \code{\link[=load_nfdb_points]{load_nfdb_points()}},
 \code{\link[=load_nfdb_polys]{load_nfdb_polys()}}
 }
