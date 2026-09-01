@@ -359,6 +359,25 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_h
   found
 }
 
+## Move `from` onto `to`, replacing whatever is there. Rename is atomic within a filesystem, but
+## Windows refuses to rename onto an existing file, and a handle left open by a failed read of that
+## file (a truncated archive that would not list, say) can outlive the unlink() by a moment. So clear
+## the target, retry briefly, and fall back to a copy.
+.replace_file <- function(from, to) {
+  for (i in seq_len(5L)) {
+    unlink(to)
+    if (!file.exists(to) && isTRUE(suppressWarnings(file.rename(from, to)))) {
+      return(TRUE)
+    }
+    Sys.sleep(0.2)
+  }
+  if (isTRUE(suppressWarnings(file.copy(from, to, overwrite = TRUE)))) {
+    unlink(from)
+    return(TRUE)
+  }
+  FALSE
+}
+
 ## Download `url` to `zip` unless a readable (i.e. non-truncated) copy is already there. Staged
 ## through a process-private `.part` file and renamed only on success, so an interrupted transfer is
 ## never mistaken for a complete one; the timeout is raised for the multi-hundred-MB archives and R's
@@ -394,7 +413,7 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_h
   if (!file.exists(part) || file.size(part) == 0) {
     stop("download of ", url, " produced no data", call. = FALSE)
   }
-  if (!file.rename(part, zip)) {
+  if (!.replace_file(part, zip)) {
     stop("unable to move the downloaded archive into place at ", zip, call. = FALSE)
   }
   ok <- TRUE
@@ -435,11 +454,8 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_h
     src <- file.path(staging, f)
     tgt <- file.path(dest, f)
     dir.create(dirname(tgt), showWarnings = FALSE, recursive = TRUE)
-    if (!file.rename(src, tgt)) {
-      if (!file.copy(src, tgt, overwrite = TRUE)) {
-        stop("unable to move extracted file into place: ", tgt, call. = FALSE)
-      }
-      unlink(src)
+    if (!.replace_file(src, tgt)) {
+      stop("unable to move extracted file into place: ", tgt, call. = FALSE)
     }
   }
   invisible(dest)

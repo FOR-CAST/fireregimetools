@@ -1,5 +1,6 @@
 # fireregimetools (development version)
 
+- Archive acquisition now replaces files portably: Windows refuses to rename onto an existing file, and a handle left open by a failed read of a truncated archive can outlive the `unlink()`, so a re-download could fail with "cannot rename ... Access is denied" instead of replacing the bad copy.
 - The fire-record loaders now check for a missing CRS up front and say which argument is at fault. `terra::project()` already rejects an empty CRS, but only after every shapefile has been read and repaired (minutes and ~1 GB of I/O for the national records), and its message names neither the study area nor the offending file.
 - The fire-record loaders now preserve the harmonised `YEAR` + `SIZE_HA` schema when no record survives the crop; `terra::crop()` returns an attribute-less `SpatVector` in that case, so callers reaching for `$YEAR` previously got `NULL` rather than an empty vector.
 - The loaders' documentation now states the two crop semantics that were only implicit: a **vector** `study_area` selects records by its geometry while a **`SpatRaster`** selects by its extent (its `NA` cells do not narrow the selection), and a perimeter clipped at the study-area boundary keeps the full reported `SIZE_HA` alongside its truncated geometry.
