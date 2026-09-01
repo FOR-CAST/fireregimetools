@@ -174,6 +174,17 @@ test_that("fetch_nfdb_points() extracts a cached zip archive", {
   expect_equal(out$YEAR, 2010L)
 })
 
+## a file:// URL for a local path, on every platform: POSIX paths are already absolute
+## ("/tmp/x" -> "file:///tmp/x"), while a Windows drive letter needs the extra leading slash
+## ("C:/Temp/x" -> "file:///C:/Temp/x")
+file_url <- function(path) {
+  p <- normalizePath(path, winslash = "/", mustWork = TRUE)
+  if (!startsWith(p, "/")) {
+    p <- paste0("/", p)
+  }
+  paste0("file://", p)
+}
+
 ## zip the contents of `dir` (flat, as the CWFIS archives are) into the absolute path `zipfile`
 zip_dir <- function(dir, zipfile) {
   withr::with_dir(dir, utils::zip(zipfile, list.files(), flags = "-q"))
@@ -249,7 +260,7 @@ test_that("a truncated archive is re-downloaded rather than extracted", {
   write_poly_partitions(src)
   upstream <- withr::local_tempdir()
   good_zip <- zip_dir(src, file.path(upstream, "NFDB_poly.zip"))
-  url <- paste0("file://", normalizePath(good_zip))
+  url <- file_url(good_zip)
 
   dest <- withr::local_tempdir()
   ## a partial download from an earlier run: right name, unreadable central directory
@@ -274,4 +285,75 @@ test_that("fetch_nbac_polys() reuses an already-extracted archive (no download)"
   )
   expect_equal(out$YEAR, 2005L)
   expect_equal(out$SIZE_HA, 10)
+})
+
+test_that("a study area without a CRS errors instead of silently returning nothing", {
+  nfdb <- sq(0, 0)
+  nfdb$YEAR <- 2010L
+  nfdb$SIZE_HA <- 5
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  ## note terra::rast() silently assigns WGS84 when the extent fits inside lon/lat bounds, so this
+  ## needs an extent that does not
+  nocrs <- terra::rast(terra::ext(0, 300, 0, 300), resolution = 30)
+  expect_error(load_nfdb_polys(f, nocrs), "no CRS")
+})
+
+test_that("records without a CRS name the offending file", {
+  nfdb <- sq(0, 0)
+  nfdb$YEAR <- 2010L
+  nfdb$SIZE_HA <- 5
+  terra::crs(nfdb) <- ""
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  expect_error(load_nfdb_polys(f, make_sa_vect()), "fire records have no CRS")
+})
+
+test_that("an empty result keeps the harmonised schema", {
+  nfdb <- sq(0, 0)
+  nfdb$YEAR <- 2010L
+  nfdb$SIZE_HA <- 5
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  ## terra::crop() hands back an attribute-less SpatVector when nothing survives; callers reaching
+  ## for `$YEAR` would get NULL rather than an empty vector
+  disjoint <- terra::vect(
+    "POLYGON ((1e6 1e6, 2e6 1e6, 2e6 2e6, 1e6 2e6, 1e6 1e6))",
+    crs = "EPSG:3005"
+  )
+  out <- load_nfdb_polys(f, disjoint)
+  expect_equal(nrow(out), 0L)
+  expect_true(all(c("YEAR", "SIZE_HA") %in% names(out)))
+  expect_length(out$YEAR, 0L)
+})
+
+test_that("a vector study area selects by geometry; a SpatRaster selects by extent", {
+  ## an L-shaped study area: the notch is inside the bounding box but outside the polygon
+  sa <- terra::vect(
+    "POLYGON ((0 0, 300 0, 300 150, 150 150, 150 300, 0 300, 0 0))",
+    crs = "EPSG:3005"
+  )
+  nfdb <- rbind(sq(10, 10, s = 50), sq(200, 200, s = 50)) # inside; in the notch
+  nfdb$YEAR <- c(2010L, 2011L)
+  nfdb$SIZE_HA <- c(5, 5)
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  expect_equal(load_nfdb_polys(f, sa)$YEAR, 2010L)
+  expect_setequal(load_nfdb_polys(f, terra::rast(sa, resolution = 30))$YEAR, c(2010L, 2011L))
+})
+
+test_that("a clipped edge perimeter keeps its full reported SIZE_HA", {
+  nfdb <- sq(250, 100) # 100 x 100, straddling the eastern edge of the 0-300 study area
+  nfdb$YEAR <- 2010L
+  nfdb$SIZE_HA <- 1000 # reported size of the whole fire
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  out <- load_nfdb_polys(f, make_sa_vect())
+  expect_equal(out$SIZE_HA, 1000) # attribute untouched ...
+  expect_equal(terra::expanse(out), 100 * 50) # ... while half the geometry was clipped away
 })

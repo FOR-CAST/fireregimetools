@@ -46,6 +46,15 @@
   repair = TRUE
 ) {
   sa <- .as_study_area(study_area)
+  ## Check the study area's CRS up front. terra::project() does reject an empty target CRS, but only
+  ## after every shapefile has been read and repaired -- minutes and ~1 GB of I/O later -- and it
+  ## says "[project] output crs is not valid" without naming the argument at fault.
+  if (!nzchar(terra::crs(sa))) {
+    stop(
+      "`study_area` has no CRS; one is required to project + crop the fire records.",
+      call. = FALSE
+    )
+  }
   p <- lapply(shp, function(x) {
     pp <- withCallingHandlers(terra::vect(x), warning = function(w) {
       if (grepl("Z coordinates ignored", conditionMessage(w))) invokeRestart("muffleWarning")
@@ -56,6 +65,16 @@
     pp
   }) |>
     tidyterra::bind_spat_rows() ## robust to column differences between multi-year partitions
+
+  ## likewise for records with no CRS: terra::project() rejects those too, with a message that says
+  ## nothing about which file is at fault
+  if (!nzchar(terra::crs(p))) {
+    stop(
+      "the fire records have no CRS (is a .prj missing?): ",
+      paste(basename(unlist(shp)), collapse = ", "),
+      call. = FALSE
+    )
+  }
 
   year_col <- .first_col(p, year_cols)
   size_col <- .first_col(p, size_cols)
@@ -79,7 +98,11 @@
   }
   p <- tidyterra::filter(p, is.na(.data$SIZE_HA) | .data$SIZE_HA >= !!min_size_ha)
   p <- terra::project(p, terra::crs(sa))
-  terra::crop(p, sa) ## clip to the study-area extent
+  out <- terra::crop(p, sa) ## geometry for a vector study area; extent for a SpatRaster
+  ## terra::crop() returns an attribute-LESS SpatVector (ncol 0) when nothing survives, so callers
+  ## that reach for `$YEAR` get NULL rather than an empty vector. Hand back an empty subset of the
+  ## harmonised input instead, which keeps the schema.
+  if (nrow(out) == 0L) p[0, ] else out
 }
 
 #' Load NBAC fire perimeters, harmonised + clipped to a study area
@@ -94,6 +117,11 @@
 #' `terra::makeValid()`, for speed), records are filtered to `fire_years` and
 #' `SIZE_HA >= min_size_ha`, then projected + cropped to `study_area`.
 #'
+#' Perimeters straddling the study-area boundary are clipped, so their geometry is
+#' truncated while `SIZE_HA` keeps the full reported fire size. Sum `SIZE_HA` for
+#' "fires that reached this study area"; use [terra::expanse()] for "area burned
+#' inside it" -- the two differ for every edge fire.
+#'
 #' NBAC perimeters are satellite-derived (best-available delineation) and span
 #' 1972-present; they are preferred over the NFDB polygon record, whose older
 #' perimeters are aerial sketches that overestimate burned area. Use
@@ -102,7 +130,10 @@
 #' @param nbac_shp Path(s) to the NBAC polygon shapefile(s).
 #' @param study_area Study area defining the output CRS + crop extent: a file path
 #'   (vector or raster), `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation
-#'   `flammableMap`).
+#'   `flammableMap`). It must carry a CRS. A **vector** study area selects records by
+#'   its geometry; a **`SpatRaster`** selects by its extent, and its `NA` cells do not
+#'   narrow that selection -- so an irregular study area passed as a raster also
+#'   returns records from the bounding box around it.
 #' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
@@ -137,12 +168,21 @@ load_nbac_polys <- function(nbac_shp, study_area, fire_years = NULL, min_size_ha
 #' The NFDB poly record ships multiple multi-year partitions with differing
 #' columns, so pass all their paths together.
 #'
+#' Perimeters straddling the study-area boundary are clipped, so their geometry is
+#' truncated while `SIZE_HA` keeps the full reported fire size. Sum `SIZE_HA` for
+#' "fires that reached this study area"; use [terra::expanse()] for "area burned
+#' inside it" -- the two differ for every edge fire.
+#'
 #' Prefer NBAC ([load_nbac_polys()]); use NFDB polygons only to backfill years NBAC
 #' does not cover.
 #'
 #' @param nfdb_shp Character vector of NFDB polygon shapefile path(s).
 #' @param study_area Study area defining the output CRS + crop extent: a file path
-#'   (vector or raster), `sf`, `SpatVector`, or `SpatRaster`.
+#'   (vector or raster), `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation
+#'   `flammableMap`). It must carry a CRS. A **vector** study area selects records by
+#'   its geometry; a **`SpatRaster`** selects by its extent, and its `NA` cells do not
+#'   narrow that selection -- so an irregular study area passed as a raster also
+#'   returns records from the bounding box around it.
 #' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
@@ -187,7 +227,11 @@ load_nfdb_polys <- function(nfdb_shp, study_area, fire_years = NULL, min_size_ha
 #' @param nfdb_shp Character vector of NFDB point shapefile path(s) (typically the
 #'   single `NFDB_point` shapefile).
 #' @param study_area Study area defining the output CRS + crop extent: a file path
-#'   (vector or raster), `sf`, `SpatVector`, or `SpatRaster`.
+#'   (vector or raster), `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation
+#'   `flammableMap`). It must carry a CRS. A **vector** study area selects records by
+#'   its geometry; a **`SpatRaster`** selects by its extent, and its `NA` cells do not
+#'   narrow that selection -- so an irregular study area passed as a raster also
+#'   returns records from the bounding box around it.
 #' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
@@ -346,6 +390,10 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_h
   if (!identical(as.integer(status), 0L)) {
     stop("download of ", url, " failed with status ", status, call. = FALSE)
   }
+  ## a download that produced nothing (or an empty file) must not be reported as a rename problem
+  if (!file.exists(part) || file.size(part) == 0) {
+    stop("download of ", url, " produced no data", call. = FALSE)
+  }
   if (!file.rename(part, zip)) {
     stop("unable to move the downloaded archive into place at ", zip, call. = FALSE)
   }
@@ -475,7 +523,10 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_h
 #' short files behind that a reader will happily accept.
 #'
 #' @param study_area Study area defining the output CRS + crop extent: a file path (vector or raster),
-#'   `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation `flammableMap`).
+#'   `sf`, `SpatVector`, or `SpatRaster` (e.g. a simulation `flammableMap`). It must carry a CRS. A
+#'   **vector** study area selects records by its geometry; a **`SpatRaster`** selects by its extent,
+#'   and its `NA` cells do not narrow that selection -- so an irregular study area passed as a raster
+#'   also returns records from the bounding box around it.
 #' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records with a smaller
 #'   reported `SIZE_HA` are dropped, while records with a missing (`NA`) size are always kept. Pass

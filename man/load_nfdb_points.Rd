@@ -11,7 +11,11 @@ load_nfdb_points(nfdb_shp, study_area, fire_years = NULL, min_size_ha = 1)
 single \code{NFDB_point} shapefile).}
 
 \item{study_area}{Study area defining the output CRS + crop extent: a file path
-(vector or raster), \code{sf}, \code{SpatVector}, or \code{SpatRaster}.}
+(vector or raster), \code{sf}, \code{SpatVector}, or \code{SpatRaster} (e.g. a simulation
+\code{flammableMap}). It must carry a CRS. A \strong{vector} study area selects records by
+its geometry; a \strong{\code{SpatRaster}} selects by its extent, and its \code{NA} cells do not
+narrow that selection -- so an irregular study area passed as a raster also
+returns records from the bounding box around it.}
 
 \item{fire_years}{Integer vector of fire years to keep; \code{NULL} (default) keeps all years.}
 

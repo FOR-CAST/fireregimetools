@@ -11,7 +11,10 @@ load_nbac_polys(nbac_shp, study_area, fire_years = NULL, min_size_ha = 1)
 
 \item{study_area}{Study area defining the output CRS + crop extent: a file path
 (vector or raster), \code{sf}, \code{SpatVector}, or \code{SpatRaster} (e.g. a simulation
-\code{flammableMap}).}
+\code{flammableMap}). It must carry a CRS. A \strong{vector} study area selects records by
+its geometry; a \strong{\code{SpatRaster}} selects by its extent, and its \code{NA} cells do not
+narrow that selection -- so an irregular study area passed as a raster also
+returns records from the bounding box around it.}
 
 \item{fire_years}{Integer vector of fire years to keep; \code{NULL} (default) keeps all years.}
 
@@ -35,6 +38,11 @@ NBAC vintages. Invalid geometries are repaired with
 \code{SIZE_HA >= min_size_ha}, then projected + cropped to \code{study_area}.
 }
 \details{
+Perimeters straddling the study-area boundary are clipped, so their geometry is
+truncated while \code{SIZE_HA} keeps the full reported fire size. Sum \code{SIZE_HA} for
+"fires that reached this study area"; use \code{\link[terra:expanse]{terra::expanse()}} for "area burned
+inside it" -- the two differ for every edge fire.
+
 NBAC perimeters are satellite-derived (best-available delineation) and span
 1972-present; they are preferred over the NFDB polygon record, whose older
 perimeters are aerial sketches that overestimate burned area. Use

@@ -10,7 +10,11 @@ load_nfdb_polys(nfdb_shp, study_area, fire_years = NULL, min_size_ha = 1)
 \item{nfdb_shp}{Character vector of NFDB polygon shapefile path(s).}
 
 \item{study_area}{Study area defining the output CRS + crop extent: a file path
-(vector or raster), \code{sf}, \code{SpatVector}, or \code{SpatRaster}.}
+(vector or raster), \code{sf}, \code{SpatVector}, or \code{SpatRaster} (e.g. a simulation
+\code{flammableMap}). It must carry a CRS. A \strong{vector} study area selects records by
+its geometry; a \strong{\code{SpatRaster}} selects by its extent, and its \code{NA} cells do not
+narrow that selection -- so an irregular study area passed as a raster also
+returns records from the bounding box around it.}
 
 \item{fire_years}{Integer vector of fire years to keep; \code{NULL} (default) keeps all years.}
 
@@ -34,6 +38,11 @@ The NFDB poly record ships multiple multi-year partitions with differing
 columns, so pass all their paths together.
 }
 \details{
+Perimeters straddling the study-area boundary are clipped, so their geometry is
+truncated while \code{SIZE_HA} keeps the full reported fire size. Sum \code{SIZE_HA} for
+"fires that reached this study area"; use \code{\link[terra:expanse]{terra::expanse()}} for "area burned
+inside it" -- the two differ for every edge fire.
+
 Prefer NBAC (\code{\link[=load_nbac_polys]{load_nbac_polys()}}); use NFDB polygons only to backfill years NBAC
 does not cover.
 }
