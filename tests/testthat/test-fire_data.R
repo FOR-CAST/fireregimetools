@@ -361,3 +361,290 @@ test_that("a clipped edge perimeter keeps its full reported SIZE_HA", {
   expect_equal(out$SIZE_HA, 1000) # attribute untouched ...
   expect_equal(terra::expanse(out), 100 * 50) # ... while half the geometry was clipped away
 })
+
+## --- spatial pre-filtering (pushdown) ----------------------------------------------------------
+##
+## The pushdown is an optimisation, so what these tests pin down is that it changes nothing: every
+## loader is run with `fireregimetools.prefilter` on and off and the two results compared. The
+## `FALSE` path is the pre-pushdown code (each source read whole), so it is the "before" to the
+## pushdown's "after".
+
+## everything about a loaded record set that a caller can observe
+fire_digest <- function(v) {
+  list(
+    n = nrow(v),
+    names = sort(names(v)),
+    crs = terra::crs(v),
+    geom = if (nrow(v) > 0L) terra::geom(v) else NULL,
+    years = v$YEAR,
+    sizes = v$SIZE_HA
+  )
+}
+
+## the same loader call with the pushdown on and off
+both_ways <- function(fun, ...) {
+  off <- withr::with_options(list(fireregimetools.prefilter = FALSE), fun(...))
+  on <- withr::with_options(list(fireregimetools.prefilter = TRUE), fun(...))
+  list(off = fire_digest(off), on = fire_digest(on))
+}
+
+## fire polygons on a lon/lat grid across Canada, written once per test that needs them: a lon/lat
+## source read against a projected study area is the case that stresses the pushdown hardest, since
+## the study area's boundary is a curve in the source CRS
+lonlat_fire_grid <- function(path, nx = 24L, ny = 12L) {
+  xs <- seq(-135, -60, length.out = nx)
+  ys <- seq(48, 68, length.out = ny)
+  cells <- expand.grid(x = xs, y = ys)
+  polys <- lapply(seq_len(nrow(cells)), function(i) {
+    terra::vect(
+      sprintf(
+        "POLYGON ((%1$f %2$f, %3$f %2$f, %3$f %4$f, %1$f %4$f, %1$f %2$f))",
+        cells$x[i],
+        cells$y[i],
+        cells$x[i] + 1.2,
+        cells$y[i] + 0.9
+      ),
+      crs = "EPSG:4326"
+    )
+  })
+  v <- do.call(rbind, polys)
+  v$YEAR <- as.integer(1972 + seq_len(nrow(v)) %% 50L)
+  v$POLY_HA <- 10 * seq_len(nrow(v)) # an area column both the NBAC and NFDB loaders accept
+  terra::writeVector(v, path, overwrite = TRUE)
+  v
+}
+
+test_that("the pushdown selects a subset of the source, not all of it", {
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  src <- lonlat_fire_grid(f)
+  sa <- terra::project(
+    terra::vect("POLYGON ((-116 53, -112 53, -112 56, -116 56, -116 53))", crs = "EPSG:4326"),
+    "EPSG:3978"
+  )
+
+  ## the pushdown must actually be pushing something down: a study area covering a few grid cells
+  ## has to read far fewer than the source's features, or the optimisation has silently regressed
+  read <- .read_fire_source(f, sa)
+  expect_lt(nrow(read), nrow(src) / 4)
+  expect_gt(nrow(read), 0L)
+})
+
+test_that("the pushdown returns the same records as reading the sources whole", {
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  lonlat_fire_grid(f)
+  sa <- terra::project(
+    terra::vect("POLYGON ((-116 53, -112 53, -112 56, -116 56, -116 53))", crs = "EPSG:4326"),
+    "EPSG:3978"
+  )
+
+  r <- both_ways(load_nbac_polys, f, sa, fire_years = NULL, min_size_ha = 0)
+  expect_gt(r$on$n, 0L)
+  expect_equal(r$on, r$off)
+})
+
+test_that("the pushdown is invariant across randomised study areas", {
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  lonlat_fire_grid(f)
+  withr::local_seed(20260911)
+
+  ## random study areas of random sizes, in a CRS the source is not in: each must return exactly
+  ## what a whole-source read would, including the ones that select nothing
+  selected <- integer(0)
+  for (i in seq_len(25L)) {
+    x0 <- stats::runif(1, -134, -62)
+    y0 <- stats::runif(1, 48, 67)
+    w <- stats::runif(1, 0.2, 8)
+    h <- stats::runif(1, 0.2, 5)
+    sa <- terra::project(
+      terra::vect(
+        sprintf(
+          "POLYGON ((%1$f %2$f, %3$f %2$f, %3$f %4$f, %1$f %4$f, %1$f %2$f))",
+          x0,
+          y0,
+          x0 + w,
+          y0 + h
+        ),
+        crs = "EPSG:4326"
+      ),
+      "EPSG:3978"
+    )
+    r <- both_ways(load_nfdb_polys, f, sa, min_size_ha = 0)
+    expect_equal(r$on, r$off, info = sprintf("study area %d: %f %f %f %f", i, x0, y0, w, h))
+    selected <- c(selected, r$on$n)
+  }
+
+  ## an agreement over nothing but empty results would prove nothing
+  expect_gt(sum(selected > 0L), 15L)
+  expect_gt(max(selected), 1L)
+})
+
+test_that("the pushdown is invariant for a SpatRaster study area (extent semantics)", {
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  lonlat_fire_grid(f)
+  ## an L-shaped footprint: as a raster it selects by extent, so records in the notch are kept --
+  ## the pushdown must not narrow that to the polygon
+  sa <- terra::project(
+    terra::vect(
+      "POLYGON ((-124 50, -100 50, -100 56, -112 56, -112 62, -124 62, -124 50))",
+      crs = "EPSG:4326"
+    ),
+    "EPSG:3978"
+  )
+  r_vect <- both_ways(load_nfdb_polys, f, sa, min_size_ha = 0)
+  r_rast <- both_ways(load_nfdb_polys, f, terra::rast(sa, resolution = 5000), min_size_ha = 0)
+
+  expect_equal(r_vect$on, r_vect$off)
+  expect_equal(r_rast$on, r_rast$off)
+  expect_gt(r_rast$on$n, r_vect$on$n) # the notch really is populated
+})
+
+test_that("the pushdown keeps a perimeter straddling the study-area edge", {
+  ## the pushdown's one failure mode would be dropping a record that the crop keeps, and an edge
+  ## record read in a different CRS is where that would happen
+  nfdb <- terra::vect(
+    "POLYGON ((-112.5 53.5, -110 53.5, -110 55, -112.5 55, -112.5 53.5))",
+    crs = "EPSG:4326"
+  )
+  nfdb$YEAR <- 2010L
+  nfdb$SIZE_HA <- 50000
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  sa <- terra::project(
+    terra::vect("POLYGON ((-116 53, -112 53, -112 56, -116 56, -116 53))", crs = "EPSG:4326"),
+    "EPSG:3978"
+  )
+  r <- both_ways(load_nfdb_polys, f, sa)
+  expect_equal(r$on$n, 1L)
+  expect_equal(r$on, r$off)
+})
+
+test_that("the pushdown is invariant for point records", {
+  p <- terra::vect(
+    data.frame(
+      x = seq(-130, -70, length.out = 60),
+      y = seq(50, 65, length.out = 60),
+      YEAR = as.integer(1972 + seq_len(60L) %% 50L),
+      SIZE_HA = seq_len(60L)
+    ),
+    geom = c("x", "y"),
+    crs = "EPSG:4326"
+  )
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(p, f, overwrite = TRUE)
+
+  sa <- terra::project(
+    terra::vect("POLYGON ((-110 56, -95 56, -95 61, -110 61, -110 56))", crs = "EPSG:4326"),
+    "EPSG:3978"
+  )
+  r <- both_ways(load_nfdb_points, f, sa, min_size_ha = 0)
+  expect_gt(r$on$n, 0L)
+  expect_equal(r$on, r$off)
+})
+
+test_that("a partition with no records near the study area binds with one that has them", {
+  ## the NFDB polygon record ships multi-year partitions, and a study area will often sit inside
+  ## only some of them; the empty reads must not cost the schema (or the records)
+  dir <- withr::local_tempdir()
+  near <- sq(0, 0)
+  near$YEAR <- 1985L
+  near$SIZE_HA <- 5
+  far <- terra::vect(
+    "POLYGON ((1e6 1e6, 1000100 1e6, 1000100 1000100, 1e6 1000100, 1e6 1e6))",
+    crs = "EPSG:3005"
+  )
+  far$YEAR <- 2022L
+  far$SIZE_HA <- 8
+  fa <- file.path(dir, "NFDB_poly_a.gpkg")
+  fb <- file.path(dir, "NFDB_poly_b.gpkg")
+  terra::writeVector(near, fa, overwrite = TRUE)
+  terra::writeVector(far, fb, overwrite = TRUE)
+
+  r <- both_ways(load_nfdb_polys, c(fa, fb), make_sa_vect())
+  expect_equal(r$on$n, 1L)
+  expect_equal(r$on$years, 1985L)
+  expect_equal(r$on, r$off)
+})
+
+test_that("a source with no CRS is reported before its geometry is read", {
+  nfdb <- sq(0, 0)
+  nfdb$YEAR <- 2010L
+  nfdb$SIZE_HA <- 5
+  dir <- withr::local_tempdir()
+  f <- file.path(dir, "NFDB_poly_nocrs.shp")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+  unlink(file.path(dir, "NFDB_poly_nocrs.prj"))
+
+  ## the proxy carries the (missing) CRS, so the pushdown path raises this too -- and names the file
+  expect_error(load_nfdb_polys(f, make_sa_vect()), "NFDB_poly_nocrs\\.shp")
+})
+
+test_that(".prefilter_extent() bounds the study area in the source CRS", {
+  sa <- terra::project(
+    terra::vect("POLYGON ((-116 53, -112 53, -112 56, -116 56, -116 53))", crs = "EPSG:4326"),
+    "EPSG:3978"
+  )
+  e <- .prefilter_extent(sa, "EPSG:4326")
+
+  ## it must cover the study area's true lon/lat footprint ...
+  true_ext <- terra::ext(terra::project(sa, "EPSG:4326"))
+  expect_equal(as.vector(terra::intersect(e, true_ext)), as.vector(true_ext))
+  ## ... and still be a small part of a national source's extent
+  expect_lt((e$xmax - e$xmin) * (e$ymax - e$ymin), 0.05 * (141 - 52) * (83 - 41))
+})
+
+test_that(".prefilter_extent() declines rather than guess", {
+  sa <- terra::vect("POLYGON ((0 0, 300 0, 300 300, 0 300, 0 0))", crs = "EPSG:3005")
+
+  expect_null(.prefilter_extent(sa, "")) # no source CRS to project into
+  ## a degenerate (zero-area) study area
+  expect_null(.prefilter_extent(terra::vect("POINT (10 10)", crs = "EPSG:3005"), "EPSG:4326"))
+  ## a study area reaching outside the source CRS's domain: project() drops the points it cannot
+  ## convert, so a box around the survivors would be too small -- decline instead
+  world <- terra::vect(
+    "POLYGON ((-179 -80, 179 -80, 179 80, -179 80, -179 -80))",
+    crs = "EPSG:4326"
+  )
+  ortho <- "+proj=ortho +lat_0=60 +lon_0=-100"
+  ## which holds only where the PROJ build refuses the far hemisphere, as they do by handing back
+  ## empty geometries for those points -- the very thing the guard is there to catch
+  pts <- terra::vect(
+    as.matrix(expand.grid(x = seq(-179, 179, length.out = 8L), y = seq(-80, 80, length.out = 8L))),
+    type = "points",
+    crs = "EPSG:4326"
+  )
+  kept <- nrow(terra::crds(suppressWarnings(terra::project(pts, ortho))))
+  skip_if(
+    kept == nrow(terra::crds(pts)),
+    "this PROJ build projects the whole world orthographically"
+  )
+  expect_null(.prefilter_extent(world, ortho))
+})
+
+test_that("prefilter = FALSE still reads (and errors) the same way", {
+  withr::local_options(fireregimetools.prefilter = FALSE)
+  nfdb <- sq(0, 0)
+  nfdb$YEAR <- 2010L
+  nfdb$SIZE_HA <- 5
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  expect_equal(load_nfdb_polys(f, make_sa_vect())$YEAR, 2010L)
+
+  nocrs <- terra::rast(terra::ext(0, 300, 0, 300), resolution = 30)
+  expect_error(load_nfdb_polys(f, nocrs), "no CRS")
+})
+
+test_that("a source that cannot be pre-filtered is read whole, and says so", {
+  nfdb <- rbind(sq(0, 0), sq(120, 0))
+  nfdb$YEAR <- c(2010L, 2011L)
+  nfdb$SIZE_HA <- c(5, 6)
+  ## a fixed basename: it appears in the message below
+  f <- file.path(withr::local_tempdir(), "NFDB_poly_x.gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  ## a zero-area study area yields no usable filter extent, so the source is read whole -- the
+  ## fallback is correct, but on the national records it costs minutes, so it is announced
+  expect_snapshot(v <- .read_fire_source(f, terra::vect("POINT (10 10)", crs = "EPSG:3005")))
+  expect_equal(nrow(v), 2L)
+})

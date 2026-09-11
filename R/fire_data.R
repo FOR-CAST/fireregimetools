@@ -28,6 +28,149 @@
   stop("`study_area` must be a file path, sf, SpatVector, or SpatRaster.", call. = FALSE)
 }
 
+## Muffle terra's "Z coordinates ignored" warning: several NBAC/NFDB vintages carry Z values and
+## trigger it on every read, and it says nothing a caller can act on.
+.muffle_z <- function(expr) {
+  withCallingHandlers(expr, warning = function(w) {
+    if (grepl("Z coordinates ignored", conditionMessage(w))) invokeRestart("muffleWarning")
+  })
+}
+
+## Records with no CRS cannot be projected + cropped, and terra::project() rejects them with a
+## message that names neither the argument nor the file at fault.
+.stop_if_no_crs <- function(crs_wkt, files) {
+  if (!nzchar(crs_wkt)) {
+    stop(
+      "the fire records have no CRS (is a .prj missing?): ",
+      paste(basename(unlist(files)), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
+}
+
+## A conservative superset of `sa`'s footprint, expressed in `src_crs`, for pushing a spatial filter
+## down to the GDAL/OGR read. Returns NULL when no trustworthy extent can be derived, which makes
+## the caller read the whole source -- slow, but never wrong.
+##
+## Why a PADDED BOUNDING BOX around a DENSIFIED grid, rather than the study-area geometry:
+##
+##  * the authoritative selection is still made downstream by terra::crop(), in the study area's own
+##    CRS. This filter's only job is to keep the read small, so it must err towards selecting too
+##    much: the surplus is discarded by crop() anyway, while a record missed here is missed for
+##    good. terra::project() moves a polygon's VERTICES only, so a study-area outline projected into
+##    the source CRS has straight chords where the true boundary curves -- a filter built from it can
+##    fall INSIDE the real footprint and drop an edge record that crop() would have kept.
+##  * a `SpatRaster` study area selects by extent by documented contract, so a geometry-exact
+##    pre-filter would quietly change that too.
+##  * terra's pushdown is bbox-based regardless: a `filter=` polygon whose footprint is L-shaped
+##    still returns the records sitting in its notch.
+##
+## The grid spans the interior as well as the boundary, because the image of a region's boundary does
+## not bound the image of its interior under every projection; and because project() silently DROPS
+## points it cannot convert (leaving an empty geometry rather than a non-finite coordinate), a grid
+## that does not come back whole means the study area reaches outside the source CRS's domain -- and
+## a box around only the survivors would be too small to trust.
+##
+## `pad_frac` slack is added twice, once in each CRS, so the box covers a *buffered* study area. That
+## is what makes the box robust to the remaining vertex-only-projection effect, in the opposite
+## direction: a source geometry lying outside the study area can, once its own vertices are projected
+## and re-joined by straight chords, cut a corner into it. Only a source segment longer than the pad
+## could do so, which no perimeter in these records comes close to.
+.prefilter_extent <- function(sa, src_crs, pad_frac = 0.05, n = 64L) {
+  if (!nzchar(src_crs)) {
+    return(NULL)
+  }
+  e <- as.vector(terra::ext(sa))
+  if (!all(is.finite(e)) || e[["xmax"]] <= e[["xmin"]] || e[["ymax"]] <= e[["ymin"]]) {
+    return(NULL)
+  }
+  pad_sa <- pad_frac * max(e[["xmax"]] - e[["xmin"]], e[["ymax"]] - e[["ymin"]])
+  grd <- as.matrix(expand.grid(
+    x = seq(e[["xmin"]] - pad_sa, e[["xmax"]] + pad_sa, length.out = n),
+    y = seq(e[["ymin"]] - pad_sa, e[["ymax"]] + pad_sa, length.out = n)
+  ))
+  ## this projects an internal scaffold, not user data, so its warnings (out-of-domain points, datum
+  ## shifts) are noise; a projection that actually fails is caught by the NULL returns instead
+  xy <- tryCatch(
+    suppressWarnings(terra::crds(terra::project(
+      terra::vect(grd, type = "points", crs = terra::crs(sa)),
+      src_crs
+    ))),
+    error = function(e) NULL
+  )
+  if (is.null(xy) || nrow(xy) != nrow(grd) || !all(is.finite(xy))) {
+    return(NULL)
+  }
+  xr <- range(xy[, 1L])
+  yr <- range(xy[, 2L])
+  pad <- pad_frac * max(xr[2L] - xr[1L], yr[2L] - yr[1L])
+  if (!is.finite(pad) || pad <= 0) {
+    return(NULL)
+  }
+  terra::ext(xr[1L], xr[2L], yr[1L], yr[2L]) + pad
+}
+
+## Read one fire-record source, pushing the study-area spatial filter down to the GDAL/OGR read so
+## that only candidate features are materialised in R. The national records are far larger than any
+## study area (the NBAC shapefile alone is ~1.9 GB for the whole of Canada), and everything read here
+## is then repaired, projected and cropped -- so filtering at the read is what keeps that work
+## proportional to the study area rather than to the country.
+##
+## `terra::vect(proxy = TRUE)` opens the source without reading geometry, which also lets a missing
+## source CRS be reported before gigabytes have been read. Every step falls back to reading the whole
+## source, so the pushdown can only shrink the read, never change the result.
+##
+## Only the SPATIAL filter is pushed down, not `fire_years`/`min_size_ha`: the geometry is what costs
+## the memory, the attribute filters are cheap once the spatial filter has done its work, and an
+## OGR-SQL `where` clause would have to second-guess each vintage's column types (the loaders already
+## tolerate a `YEAR` that needs coercing) for no measurable gain.
+##
+## spatialutils::read_vector_aoi() does the same pushdown, but it refines the read with
+## terra::relate() against the AOI, which makes the SOURCE-CRS geometry the authoritative selection.
+## Here it must not be: the study area's own CRS is where records are selected (see
+## .prefilter_extent()), and a `SpatRaster` study area selects by extent by documented contract.
+.read_fire_source <- function(x, sa, prefilter = TRUE) {
+  ## a fallback is correct but can turn seconds into many minutes on the national records, so say so
+  ## rather than leave the caller wondering where the time went
+  read_all <- function(why = NULL) {
+    if (!is.null(why)) {
+      message("no spatial pre-filter for ", basename(x), " (", why, "); reading the whole source")
+    }
+    .muffle_z(terra::vect(x))
+  }
+  if (!isTRUE(prefilter)) {
+    return(read_all())
+  }
+  px <- tryCatch(terra::vect(x, proxy = TRUE), error = function(e) NULL)
+  if (is.null(px)) {
+    return(read_all("it cannot be opened for a filtered read"))
+  }
+  .stop_if_no_crs(terra::crs(px), x)
+  e <- .prefilter_extent(sa, terra::crs(px))
+  if (is.null(e)) {
+    return(read_all("the study area has no usable footprint in its CRS"))
+  }
+  out <- tryCatch(.muffle_z(terra::query(px, extent = e)), error = function(err) NULL)
+  if (is.null(out)) read_all("the filtered read failed") else out
+}
+
+## Bind the per-source reads into one SpatVector, keeping the attribute schema when nothing was
+## selected. tidyterra::bind_spat_rows() is what makes differing columns across the NFDB polygon
+## record's multi-year partitions bindable, but handed nothing but empty parts it returns a
+## single placeholder `first_empty` column instead of the schema -- and a study area that selects no
+## records is ordinary (a pushed-down read returns none, and so does a study area outside the
+## records' footprint), so callers would then be told their file was missing its year/size columns.
+## Empty parts carry nothing to bind, so drop them; if that leaves nothing, hand back the first read
+## as the (zero-row) schema carrier.
+.bind_fire_parts <- function(parts) {
+  keep <- parts[vapply(parts, function(x) nrow(x) > 0L, logical(1L))]
+  if (!length(keep)) {
+    return(parts[[1L]])
+  }
+  tidyterra::bind_spat_rows(keep)
+}
+
 ## Shared body: read shapefile(s), optionally repair invalid geometries, harmonise
 ## YEAR + SIZE_HA (tolerant columns), filter to fire years + >= `min_size_ha`,
 ## project + crop to the study area. `size_required = TRUE` (NBAC) errors on a
@@ -35,6 +178,9 @@
 ## stay lenient). `repair = TRUE` for polygons (which may be topologically invalid);
 ## points are always valid, so point loaders pass `repair = FALSE` (skips a needless
 ## makeValid). Records with a missing (`NA`) size pass the size filter regardless.
+## `prefilter = FALSE` reads each source whole instead of pushing the study-area filter down to
+## GDAL: the same records, read the slow way -- an escape hatch, and the reference path the tests
+## compare the pushdown against.
 .load_fire_vect <- function(
   shp,
   study_area,
@@ -43,7 +189,8 @@
   size_cols,
   size_required,
   min_size_ha = 1,
-  repair = TRUE
+  repair = TRUE,
+  prefilter = getOption("fireregimetools.prefilter", TRUE)
 ) {
   sa <- .as_study_area(study_area)
   ## Check the study area's CRS up front. terra::project() does reject an empty target CRS, but only
@@ -55,26 +202,24 @@
       call. = FALSE
     )
   }
-  p <- lapply(shp, function(x) {
-    pp <- withCallingHandlers(terra::vect(x), warning = function(w) {
-      if (grepl("Z coordinates ignored", conditionMessage(w))) invokeRestart("muffleWarning")
-    })
+  parts <- lapply(shp, function(x) {
+    ## the study-area filter is pushed down to the read, so the repair below (and the projection and
+    ## crop further down) see only the records near the study area rather than the whole country.
+    ## Selecting before repairing rather than after is safe: the filter tests each record's STORED
+    ## bounding box, and makeValid() derives its output from the input's own linework, so a repaired
+    ## geometry never reaches outside the box its broken form was selected by.
+    pp <- .read_fire_source(x, sa, prefilter = prefilter)
     if (isTRUE(repair)) {
       pp <- spatialutils::repair_geoms(pp) ## repair invalid geometries (only the invalid subset)
     }
     pp
-  }) |>
-    tidyterra::bind_spat_rows() ## robust to column differences between multi-year partitions
+  })
+  p <- .bind_fire_parts(parts)
 
   ## likewise for records with no CRS: terra::project() rejects those too, with a message that says
-  ## nothing about which file is at fault
-  if (!nzchar(terra::crs(p))) {
-    stop(
-      "the fire records have no CRS (is a .prj missing?): ",
-      paste(basename(unlist(shp)), collapse = ", "),
-      call. = FALSE
-    )
-  }
+  ## nothing about which file is at fault. The pushdown path reports this from the proxy, before any
+  ## geometry is read; this backstops the whole-source reads, which do not consult one.
+  .stop_if_no_crs(terra::crs(p), shp)
 
   year_col <- .first_col(p, year_cols)
   size_col <- .first_col(p, size_cols)
@@ -142,6 +287,21 @@
 #' @returns A `SpatVector` of NBAC perimeters cropped to `study_area`, in its CRS,
 #'   carrying harmonised integer `YEAR` + numeric `SIZE_HA` columns.
 #'
+#' @section Spatial pre-filtering:
+#' The study-area filter is pushed down to the GDAL/OGR read, so only records near
+#' the study area are materialised in R: the source is opened as a
+#' [terra::vect()] *proxy* (no geometry read), the study area's footprint is
+#' projected into the records' own CRS as a padded bounding box, and only the
+#' features inside it are read. Geometry repair, projection and the final crop
+#' then see a study-area-sized subset rather than the whole national record, which
+#' is what keeps the loaders' time and memory proportional to the study area.
+#'
+#' The box is deliberately generous -- the exact selection is still made by
+#' `terra::crop()` in the study area's CRS, and every step of the pushdown falls
+#' back to reading the source whole -- so results do not depend on it. Set
+#' `options(fireregimetools.prefilter = FALSE)` to read the sources whole
+#' regardless; the records returned are the same, they just take longer to arrive.
+#'
 #' @family fire-record loaders
 #' @export
 load_nbac_polys <- function(nbac_shp, study_area, fire_years = NULL, min_size_ha = 1) {
@@ -192,6 +352,7 @@ load_nbac_polys <- function(nbac_shp, study_area, fire_years = NULL, min_size_ha
 #'   carrying harmonised integer `YEAR` + numeric `SIZE_HA` columns.
 #'
 #' @family fire-record loaders
+#' @inheritSection load_nbac_polys Spatial pre-filtering
 #' @export
 load_nfdb_polys <- function(nfdb_shp, study_area, fire_years = NULL, min_size_ha = 1) {
   .load_fire_vect(
@@ -241,6 +402,7 @@ load_nfdb_polys <- function(nfdb_shp, study_area, fire_years = NULL, min_size_ha
 #'   carrying harmonised integer `YEAR` + numeric `SIZE_HA` columns.
 #'
 #' @family fire-record loaders
+#' @inheritSection load_nbac_polys Spatial pre-filtering
 #' @export
 load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_ha = 1) {
   .load_fire_vect(
@@ -556,6 +718,7 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_h
 #'
 #' @seealso [load_nfdb_points()]
 #' @family fire-record loaders
+#' @inheritSection load_nbac_polys Spatial pre-filtering
 #' @export
 fetch_nfdb_points <- function(
   study_area,
@@ -588,6 +751,7 @@ fetch_nfdb_points <- function(
 #'
 #' @seealso [load_nfdb_polys()]
 #' @family fire-record loaders
+#' @inheritSection load_nbac_polys Spatial pre-filtering
 #' @export
 fetch_nfdb_polys <- function(
   study_area,
@@ -623,6 +787,7 @@ fetch_nfdb_polys <- function(
 #'
 #' @seealso [load_nbac_polys()]
 #' @family fire-record loaders
+#' @inheritSection load_nbac_polys Spatial pre-filtering
 #' @export
 fetch_nbac_polys <- function(
   study_area,

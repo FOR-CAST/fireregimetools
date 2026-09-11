@@ -48,6 +48,23 @@ NBAC perimeters are satellite-derived (best-available delineation) and span
 perimeters are aerial sketches that overestimate burned area. Use
 \code{\link[=load_nfdb_polys]{load_nfdb_polys()}} only to backfill years NBAC does not cover.
 }
+\section{Spatial pre-filtering}{
+
+The study-area filter is pushed down to the GDAL/OGR read, so only records near
+the study area are materialised in R: the source is opened as a
+\code{\link[terra:vect]{terra::vect()}} \emph{proxy} (no geometry read), the study area's footprint is
+projected into the records' own CRS as a padded bounding box, and only the
+features inside it are read. Geometry repair, projection and the final crop
+then see a study-area-sized subset rather than the whole national record, which
+is what keeps the loaders' time and memory proportional to the study area.
+
+The box is deliberately generous -- the exact selection is still made by
+\code{terra::crop()} in the study area's CRS, and every step of the pushdown falls
+back to reading the source whole -- so results do not depend on it. Set
+\code{options(fireregimetools.prefilter = FALSE)} to read the sources whole
+regardless; the records returned are the same, they just take longer to arrive.
+}
+
 \seealso{
 Other fire-record loaders:
 \code{\link[=fetch_nbac_polys]{fetch_nbac_polys()}},
