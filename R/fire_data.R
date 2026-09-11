@@ -28,6 +28,27 @@
   stop("`study_area` must be a file path, sf, SpatVector, or SpatRaster.", call. = FALSE)
 }
 
+## The extent to read from a fire-record file: the study area's extent, projected into the file's CRS.
+## Reading only that extent lets GDAL skip the rest of a national archive through the file's spatial
+## index: for a 100 km study area the NBAC shapefile took ~0.5 s and ~0.3 GB this way, against ~3.6 min
+## and ~17 GB to read and repair it in full. A reprojected edge is curved, so the extent's outline is
+## densified before projecting, along straight lines in the study area's CRS, which is how the crop
+## draws them (terra::project() on a SpatExtent densifies along great circles, which for a lon/lat
+## study area bow away from a parallel edge and missed records just inside it), and the result is
+## widened by 1% as a margin. A file without a CRS is read in full, so the check in .load_fire_vect()
+## can name it.
+.read_extent <- function(sa, x) {
+  file_crs <- terra::crs(terra::vect(x, proxy = TRUE))
+  if (!nzchar(file_crs)) {
+    return(NULL)
+  }
+  e <- terra::ext(sa)
+  size <- max(terra::xmax(e) - terra::xmin(e), terra::ymax(e) - terra::ymin(e))
+  outline <- terra::densify(terra::as.polygons(e, crs = terra::crs(sa)), size / 100, flat = TRUE)
+  fe <- terra::ext(terra::project(outline, file_crs))
+  terra::extend(fe, 0.01 * max(terra::xmax(fe) - terra::xmin(fe), terra::ymax(fe) - terra::ymin(fe)))
+}
+
 ## Shared body: read shapefile(s), optionally repair invalid geometries, harmonise
 ## YEAR + SIZE_HA (tolerant columns), filter to fire years + >= `min_size_ha`,
 ## project + crop to the study area. `size_required = TRUE` (NBAC) errors on a
@@ -56,15 +77,22 @@
     )
   }
   p <- lapply(shp, function(x) {
-    pp <- withCallingHandlers(terra::vect(x), warning = function(w) {
+    pp <- withCallingHandlers(terra::vect(x, extent = .read_extent(sa, x)), warning = function(w) {
       if (grepl("Z coordinates ignored", conditionMessage(w))) invokeRestart("muffleWarning")
     })
     if (isTRUE(repair)) {
       pp <- spatialutils::repair_geoms(pp) ## repair invalid geometries (only the invalid subset)
     }
     pp
-  }) |>
-    tidyterra::bind_spat_rows() ## robust to column differences between multi-year partitions
+  })
+  ## a file with no records in the study area's extent is read as zero rows, and bind_spat_rows()
+  ## turns a zero-row element into a lone `first_empty` column; keep the first file's schema if all are empty
+  nonempty <- Filter(function(pp) nrow(pp) > 0L, p)
+  p <- if (length(nonempty)) {
+    tidyterra::bind_spat_rows(nonempty) ## robust to column differences between multi-year partitions
+  } else {
+    p[[1L]]
+  }
 
   ## likewise for records with no CRS: terra::project() rejects those too, with a message that says
   ## nothing about which file is at fault

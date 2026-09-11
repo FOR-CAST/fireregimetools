@@ -350,6 +350,23 @@ test_that("a vector study area selects by geometry; a SpatRaster selects by exte
   expect_setequal(load_nfdb_polys(f, terra::rast(sa, resolution = 30))$YEAR, c(2010L, 2011L))
 })
 
+test_that("a study area in another CRS keeps the records near its reprojected edges", {
+  ## the loaders read only the study area's extent, projected into the records' CRS. Parallels are
+  ## curved in BC Albers, so an extent taken from the projected corners alone would miss the first
+  ## record, which sits just inside the southern edge on the central meridian.
+  sa <- terra::vect("POLYGON ((-130 50, -122 50, -122 56, -130 56, -130 50))", crs = "EPSG:4326")
+  nfdb <- terra::vect(cbind(c(-126, -126, -140), c(50.01, 53, 53)), crs = "EPSG:4326") |>
+    terra::project("EPSG:3005")
+  nfdb$YEAR <- c(2010L, 2011L, 2012L) # inside the edge; inside; outside
+  nfdb$SIZE_HA <- 5
+  corners <- terra::project(terra::as.points(sa), "EPSG:3005")
+  expect_lt(terra::crds(nfdb)[1, 2], terra::ymin(terra::ext(corners))) # the fixture is only useful if this holds
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  expect_setequal(load_nfdb_points(f, sa)$YEAR, c(2010L, 2011L))
+})
+
 test_that("a clipped edge perimeter keeps its full reported SIZE_HA", {
   nfdb <- sq(250, 100) # 100 x 100, straddling the eastern edge of the 0-300 study area
   nfdb$YEAR <- 2010L
