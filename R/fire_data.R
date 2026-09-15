@@ -53,7 +53,7 @@
 ## down to the GDAL/OGR read. Returns NULL when no trustworthy extent can be derived, which makes
 ## the caller read the whole source -- slow, but never wrong.
 ##
-## Why a PADDED BOUNDING BOX around a DENSIFIED grid, rather than the study-area geometry:
+## Why a PADDED BOUNDING BOX, rather than the study-area geometry:
 ##
 ##  * the authoritative selection is still made downstream by terra::crop(), in the study area's own
 ##    CRS. This filter's only job is to keep the read small, so it must err towards selecting too
@@ -66,49 +66,69 @@
 ##  * terra's pushdown is bbox-based regardless: a `filter=` polygon whose footprint is L-shaped
 ##    still returns the records sitting in its notch.
 ##
-## The grid spans the interior as well as the boundary, because the image of a region's boundary does
-## not bound the image of its interior under every projection; and because project() silently DROPS
-## points it cannot convert (leaving an empty geometry rather than a non-finite coordinate), a grid
-## that does not come back whole means the study area reaches outside the source CRS's domain -- and
-## a box around only the survivors would be too small to trust.
+## How the box is built: the study area's extent is widened, its outline densified along STRAIGHT
+## lines in the study area's CRS (`flat = TRUE`) -- which is how crop() draws its edges -- and the
+## box taken around that outline's projected vertices. The corners alone are not enough, because a
+## reprojected edge curves: a lon/lat study area's parallels bow in BC Albers, so a record just inside
+## the southern edge falls outside the extent of the projected corners. Nor is terra's own
+## project(<SpatExtent>), which densifies along great circles; those leave a parallel edge, and missed
+## exactly such a record (#1, which contributed this construction and its regression test).
+##
+## An outline's projected box bounds the whole study area wherever the projection is continuous,
+## which leaves two ways it can fail, and both are detected rather than padded over:
+##
+##  * project() silently DROPS points it cannot convert (leaving an empty geometry rather than a
+##    non-finite coordinate), so an outline that does not come back whole means the study area
+##    reaches outside the source CRS's domain -- and a box around only the survivors is too small.
+##  * a lon/lat source is discontinuous at the poles and the antimeridian. A study area containing a
+##    pole maps its outline to a ring of latitudes that stops short of it, and one straddling the
+##    antimeridian maps it to both ends of the longitude range. Either way the outline's longitudes
+##    wrap (span > 180 degrees), and no box around them can be trusted.
 ##
 ## `pad_frac` slack is added twice, once in each CRS, so the box covers a *buffered* study area. That
-## is what makes the box robust to the remaining vertex-only-projection effect, in the opposite
-## direction: a source geometry lying outside the study area can, once its own vertices are projected
-## and re-joined by straight chords, cut a corner into it. Only a source segment longer than the pad
-## could do so, which no perimeter in these records comes close to.
-.prefilter_extent <- function(sa, src_crs, pad_frac = 0.05, n = 64L) {
+## guards the one vertex-only-projection effect the outline cannot: a source geometry lying outside
+## the study area can, once its own vertices are projected and re-joined by straight chords, cut a
+## corner into it. Only a source segment longer than the pad could do so, which no perimeter in these
+## records comes close to. `pad_frac = 0` is allowed, so the outline can be tested on its own.
+.prefilter_extent <- function(sa, src_crs, pad_frac = 0.05, interval_frac = 0.01) {
   if (!nzchar(src_crs)) {
     return(NULL)
   }
-  e <- as.vector(terra::ext(sa))
-  if (!all(is.finite(e)) || e[["xmax"]] <= e[["xmin"]] || e[["ymax"]] <= e[["ymin"]]) {
+  e <- terra::ext(sa)
+  ev <- as.vector(e)
+  if (!all(is.finite(ev)) || ev[["xmax"]] <= ev[["xmin"]] || ev[["ymax"]] <= ev[["ymin"]]) {
     return(NULL)
   }
-  pad_sa <- pad_frac * max(e[["xmax"]] - e[["xmin"]], e[["ymax"]] - e[["ymin"]])
-  grd <- as.matrix(expand.grid(
-    x = seq(e[["xmin"]] - pad_sa, e[["xmax"]] + pad_sa, length.out = n),
-    y = seq(e[["ymin"]] - pad_sa, e[["ymax"]] + pad_sa, length.out = n)
-  ))
+  span <- max(ev[["xmax"]] - ev[["xmin"]], ev[["ymax"]] - ev[["ymin"]])
+  ## Do NOT change this to `flat = FALSE`. Beyond densifying along great circles (the wrong edge, see
+  ## above), `flat = FALSE` changes the UNITS of `interval`: `flat = TRUE` reads it in the study
+  ## area's CRS units, but a geodesic densify reads it in METRES. On a lon/lat study area this
+  ## degree-sized interval then means centimetres -- an 8 x 6 degree study area densified at 0.08 gets
+  ## 351 vertices with `flat = TRUE` and 30,094,846 with `flat = FALSE`, and projecting those peaks at
+  ## 27.6 GB (measured) -- enough to OOM a workstation. A geodesic outline would need its interval
+  ## converted to metres, and would still be the wrong edge.
+  outline <- terra::as.polygons(terra::extend(e, pad_frac * span), crs = terra::crs(sa)) |>
+    terra::densify(interval_frac * span, flat = TRUE) |>
+    terra::as.points()
   ## this projects an internal scaffold, not user data, so its warnings (out-of-domain points, datum
   ## shifts) are noise; a projection that actually fails is caught by the NULL returns instead
   xy <- tryCatch(
-    suppressWarnings(terra::crds(terra::project(
-      terra::vect(grd, type = "points", crs = terra::crs(sa)),
-      src_crs
-    ))),
+    suppressWarnings(terra::crds(terra::project(outline, src_crs))),
     error = function(e) NULL
   )
-  if (is.null(xy) || nrow(xy) != nrow(grd) || !all(is.finite(xy))) {
+  if (is.null(xy) || nrow(xy) != nrow(terra::crds(outline)) || !all(is.finite(xy))) {
     return(NULL)
   }
   xr <- range(xy[, 1L])
   yr <- range(xy[, 2L])
-  pad <- pad_frac * max(xr[2L] - xr[1L], yr[2L] - yr[1L])
-  if (!is.finite(pad) || pad <= 0) {
+  if (isTRUE(terra::is.lonlat(src_crs)) && xr[2L] - xr[1L] > 180) {
     return(NULL)
   }
-  terra::ext(xr[1L], xr[2L], yr[1L], yr[2L]) + pad
+  span_src <- max(xr[2L] - xr[1L], yr[2L] - yr[1L])
+  if (!is.finite(span_src) || span_src <= 0) {
+    return(NULL)
+  }
+  terra::extend(terra::ext(xr[1L], xr[2L], yr[1L], yr[2L]), pad_frac * span_src)
 }
 
 ## Read one fire-record source, pushing the study-area spatial filter down to the GDAL/OGR read so

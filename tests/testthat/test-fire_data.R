@@ -638,6 +638,47 @@ test_that(".prefilter_extent() declines rather than guess", {
   expect_null(.prefilter_extent(world, ortho))
 })
 
+test_that(".prefilter_extent() follows a curved edge without relying on its padding", {
+  ## the fixture from #1: a record just inside a lon/lat study area's southern edge, which bows below
+  ## the extent of the projected corners in BC Albers. With the padding switched off, only densifying
+  ## the outline along the edge -- not the corners, and not great circles -- reaches it.
+  sa <- terra::vect("POLYGON ((-130 50, -122 50, -122 56, -130 56, -130 50))", crs = "EPSG:4326")
+  rec <- terra::crds(terra::project(
+    terra::vect(cbind(-126, 50.01), crs = "EPSG:4326"),
+    "EPSG:3005"
+  ))
+  corners <- terra::ext(terra::project(terra::as.points(sa), "EPSG:3005"))
+  expect_lt(rec[1, 2], terra::ymin(corners)) # the fixture is only useful if this holds
+
+  expect_gte(rec[1, 2], terra::ymin(.prefilter_extent(sa, "EPSG:3005", pad_frac = 0)))
+})
+
+test_that(".prefilter_extent() declines when the study area wraps a lon/lat source", {
+  ## an extent containing the North Pole: in a lon/lat source its outline is a ring of latitudes
+  ## stopping short of the pole, so no box around it would hold the records nearest the pole
+  pole <- terra::vect(
+    "POLYGON ((-1e6 -1e6, 1e6 -1e6, 1e6 1e6, -1e6 1e6, -1e6 -1e6))",
+    crs = "EPSG:3995"
+  )
+  expect_null(.prefilter_extent(pole, "EPSG:4326"))
+  ## and one straddling the antimeridian, whose outline reaches both ends of the longitude range
+  dateline <- terra::vect(
+    "POLYGON ((-2.5e6 1e6, -1.5e6 1e6, -1.5e6 2e6, -2.5e6 2e6, -2.5e6 1e6))",
+    crs = "EPSG:3338"
+  )
+  expect_null(.prefilter_extent(dateline, "EPSG:4326"))
+
+  ## a projected source has no such discontinuity, so the pole case is filtered there, and the box
+  ## holds the pole
+  e <- .prefilter_extent(pole, "EPSG:3978")
+  expect_s4_class(e, "SpatExtent")
+  at_pole <- terra::crds(terra::project(terra::vect(cbind(0, 0), crs = "EPSG:3995"), "EPSG:3978"))
+  expect_gte(at_pole[1, 1], terra::xmin(e))
+  expect_lte(at_pole[1, 1], terra::xmax(e))
+  expect_gte(at_pole[1, 2], terra::ymin(e))
+  expect_lte(at_pole[1, 2], terra::ymax(e))
+})
+
 test_that("prefilter = FALSE still reads (and errors) the same way", {
   withr::local_options(fireregimetools.prefilter = FALSE)
   nfdb <- sq(0, 0)
