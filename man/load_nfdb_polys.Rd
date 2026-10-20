@@ -14,7 +14,9 @@ load_nfdb_polys(nfdb_shp, study_area, fire_years = NULL, min_size_ha = 1)
 \code{flammableMap}). It must carry a CRS. A \strong{vector} study area selects records by
 its geometry; a \strong{\code{SpatRaster}} selects by its extent, and its \code{NA} cells do not
 narrow that selection -- so an irregular study area passed as a raster also
-returns records from the bounding box around it.}
+returns records from the bounding box around it. \code{NULL} returns the harmonised
+records whole, in their source CRS, neither projected nor cropped -- for a caller
+that subsets by its own geometry downstream rather than by one study area here.}
 
 \item{fire_years}{Integer vector of fire years to keep; \code{NULL} (default) keeps all years.}
 

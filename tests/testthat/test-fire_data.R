@@ -128,6 +128,31 @@ test_that("load_nfdb_points() projects + crops to the study area", {
   expect_true(terra::same.crs(out, make_sa_rast()))
 })
 
+test_that("study_area = NULL returns the records whole, in their source CRS", {
+  ## lon/lat on purpose: a projected study area would have to reproject these, so an output still in
+  ## EPSG:4326 is evidence that nothing was projected rather than a CRS that happened to match.
+  p <- terra::vect(
+    data.frame(
+      x = c(-122, -60), # -60 is a continent away from any BC study area
+      y = c(53, 47),
+      YEAR = c(2005L, 2006L),
+      SIZE_HA = c(4, 7)
+    ),
+    geom = c("x", "y"),
+    crs = "EPSG:4326"
+  )
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(p, f, overwrite = TRUE)
+
+  out <- load_nfdb_points(f, NULL, fire_years = 2000:2020)
+  expect_setequal(out$SIZE_HA, c(4, 7)) ## the distant record survives: nothing was cropped
+  expect_true(terra::same.crs(out, "EPSG:4326"))
+
+  ## the year and size filters still apply, so NULL skips the crop and nothing else
+  expect_equal(load_nfdb_points(f, NULL, fire_years = 2006)$SIZE_HA, 7)
+  expect_equal(load_nfdb_points(f, NULL, min_size_ha = 5)$SIZE_HA, 7)
+})
+
 test_that("load_nbac_polys() errors when year/size columns are absent", {
   bad <- sq(0, 0)
   bad$SOMETHING <- 1L
@@ -559,6 +584,20 @@ test_that("the pushdown is invariant for point records", {
   expect_equal(r$on, r$off)
 })
 
+test_that("study_area = NULL ignores the pushdown option", {
+  ## there is no study area to push a spatial filter down against; leaving the option to reach
+  ## .prefilter_extent() would error on the absent footprint rather than read the records whole.
+  nfdb <- rbind(sq(0, 0), sq(1e6, 1e6))
+  nfdb$YEAR <- c(1985L, 2015L)
+  nfdb$SIZE_HA <- c(5, 8)
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nfdb, f, overwrite = TRUE)
+
+  both <- both_ways(load_nfdb_polys, f, NULL, fire_years = 1900:2025)
+  expect_equal(both$off, both$on)
+  expect_equal(both$on$n, 2L)
+})
+
 test_that("a partition with no records near the study area binds with one that has them", {
   ## the NFDB polygon record ships multi-year partitions, and a study area will often sit inside
   ## only some of them; the empty reads must not cost the schema (or the records)
@@ -778,13 +817,11 @@ test_that("a stray pre-1972 shapefile under dest cannot stand in for the 1972-on
   write_pre1972_partition(sub)
 
   expect_error(
-    suppressWarnings(
-      download_fire_records(
-        "nfdb_poly",
-        dest = dest,
-        url = "https://example.invalid/NFDB_poly.zip"
-      )
-    ),
+    suppressWarnings(download_fire_records(
+      "nfdb_poly",
+      dest = dest,
+      url = "https://example.invalid/NFDB_poly.zip"
+    )),
     "no 1972-onward NFDB polygon shapefile"
   )
 })

@@ -14,7 +14,9 @@ load_nbac_polys(nbac_shp, study_area, fire_years = NULL, min_size_ha = 1)
 \code{flammableMap}). It must carry a CRS. A \strong{vector} study area selects records by
 its geometry; a \strong{\code{SpatRaster}} selects by its extent, and its \code{NA} cells do not
 narrow that selection -- so an irregular study area passed as a raster also
-returns records from the bounding box around it.}
+returns records from the bounding box around it. \code{NULL} returns the harmonised
+records whole, in their source CRS, neither projected nor cropped -- for a caller
+that subsets by its own geometry downstream rather than by one study area here.}
 
 \item{fire_years}{Integer vector of fire years to keep; \code{NULL} (default) keeps all years.}
 
@@ -44,9 +46,18 @@ truncated while \code{SIZE_HA} keeps the full reported fire size. Sum \code{SIZE
 inside it" -- the two differ for every edge fire.
 
 NBAC perimeters are satellite-derived (best-available delineation) and span
-1972-present; they are preferred over the NFDB polygon record, whose older
-perimeters are aerial sketches that overestimate burned area. Use
-\code{\link[=load_nfdb_polys]{load_nfdb_polys()}} only to backfill years NBAC does not cover.
+1972-present; they are preferred over the NFDB polygon record. The NFDB's own
+documentation claims no accuracy, saying only that "data accuracy varies due to
+different mapping techniques" and that "data completeness and quality vary among
+agencies and between years" (Canadian Forest Service 2021). The comparison has
+been quantified elsewhere: NBAC removes unburned islands and interior water,
+which agency perimeters do inconsistently (Hall et al. 2020,
+\doi{10.1071/WF19201}), and CNFDB annual burned-area estimates carry confidence
+intervals roughly three times the width of NBAC's, with retroactive Landsat
+mapping of Northwest Territories fires cutting the historical estimate by 3 Mha
+(16\%) -- the least reliable tier of that record being largely aerial survey
+(Skakun et al. 2022, \doi{10.3390/rs14133050}). Use \code{\link[=load_nfdb_polys]{load_nfdb_polys()}} only to
+backfill years NBAC does not cover.
 }
 \section{Spatial pre-filtering}{
 

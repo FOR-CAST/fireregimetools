@@ -212,11 +212,17 @@
   repair = TRUE,
   prefilter = getOption("fireregimetools.prefilter", TRUE)
 ) {
-  sa <- .as_study_area(study_area)
-  ## Check the study area's CRS up front. terra::project() does reject an empty target CRS, but only
-  ## after every shapefile has been read and repaired -- minutes and ~1 GB of I/O later -- and it
-  ## says "[project] output crs is not valid" without naming the argument at fault.
-  if (!nzchar(terra::crs(sa))) {
+  ## `study_area = NULL` asks for the records whole, in their own CRS: harmonise and filter, but do
+  ## not project or crop. A caller that subsets by its own geometry downstream (rather than by one
+  ## study area here) would otherwise have to re-implement the read + harmonisation to avoid the
+  ## crop. There is nothing to push a spatial filter down against, so the pushdown is off for it.
+  sa <- if (is.null(study_area)) NULL else .as_study_area(study_area)
+  if (is.null(sa)) {
+    prefilter <- FALSE
+  } else if (!nzchar(terra::crs(sa))) {
+    ## Check the study area's CRS up front. terra::project() does reject an empty target CRS, but
+    ## only after every shapefile has been read and repaired -- minutes and ~1 GB of I/O later --
+    ## and it says "[project] output crs is not valid" without naming the argument at fault.
     stop(
       "`study_area` has no CRS; one is required to project + crop the fire records.",
       call. = FALSE
@@ -262,6 +268,9 @@
     p <- tidyterra::filter(p, .data$YEAR %in% !!fire_years)
   }
   p <- tidyterra::filter(p, is.na(.data$SIZE_HA) | .data$SIZE_HA >= !!min_size_ha)
+  if (is.null(sa)) {
+    return(p) ## no study area: the harmonised records whole, in their source CRS
+  }
   p <- terra::project(p, terra::crs(sa))
   out <- terra::crop(p, sa) ## geometry for a vector study area; extent for a SpatRaster
   ## terra::crop() returns an attribute-LESS SpatVector (ncol 0) when nothing survives, so callers
@@ -288,9 +297,18 @@
 #' inside it" -- the two differ for every edge fire.
 #'
 #' NBAC perimeters are satellite-derived (best-available delineation) and span
-#' 1972-present; they are preferred over the NFDB polygon record, whose older
-#' perimeters are aerial sketches that overestimate burned area. Use
-#' [load_nfdb_polys()] only to backfill years NBAC does not cover.
+#' 1972-present; they are preferred over the NFDB polygon record. The NFDB's own
+#' documentation claims no accuracy, saying only that "data accuracy varies due to
+#' different mapping techniques" and that "data completeness and quality vary among
+#' agencies and between years" (Canadian Forest Service 2021). The comparison has
+#' been quantified elsewhere: NBAC removes unburned islands and interior water,
+#' which agency perimeters do inconsistently (Hall et al. 2020,
+#' \doi{10.1071/WF19201}), and CNFDB annual burned-area estimates carry confidence
+#' intervals roughly three times the width of NBAC's, with retroactive Landsat
+#' mapping of Northwest Territories fires cutting the historical estimate by 3 Mha
+#' (16%) -- the least reliable tier of that record being largely aerial survey
+#' (Skakun et al. 2022, \doi{10.3390/rs14133050}). Use [load_nfdb_polys()] only to
+#' backfill years NBAC does not cover.
 #'
 #' @param nbac_shp Path(s) to the NBAC polygon shapefile(s).
 #' @param study_area Study area defining the output CRS + crop extent: a file path
@@ -298,7 +316,9 @@
 #'   `flammableMap`). It must carry a CRS. A **vector** study area selects records by
 #'   its geometry; a **`SpatRaster`** selects by its extent, and its `NA` cells do not
 #'   narrow that selection -- so an irregular study area passed as a raster also
-#'   returns records from the bounding box around it.
+#'   returns records from the bounding box around it. `NULL` returns the harmonised
+#'   records whole, in their source CRS, neither projected nor cropped -- for a caller
+#'   that subsets by its own geometry downstream rather than by one study area here.
 #' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
@@ -362,7 +382,9 @@ load_nbac_polys <- function(nbac_shp, study_area, fire_years = NULL, min_size_ha
 #'   `flammableMap`). It must carry a CRS. A **vector** study area selects records by
 #'   its geometry; a **`SpatRaster`** selects by its extent, and its `NA` cells do not
 #'   narrow that selection -- so an irregular study area passed as a raster also
-#'   returns records from the bounding box around it.
+#'   returns records from the bounding box around it. `NULL` returns the harmonised
+#'   records whole, in their source CRS, neither projected nor cropped -- for a caller
+#'   that subsets by its own geometry downstream rather than by one study area here.
 #' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
@@ -412,7 +434,9 @@ load_nfdb_polys <- function(nfdb_shp, study_area, fire_years = NULL, min_size_ha
 #'   `flammableMap`). It must carry a CRS. A **vector** study area selects records by
 #'   its geometry; a **`SpatRaster`** selects by its extent, and its `NA` cells do not
 #'   narrow that selection -- so an irregular study area passed as a raster also
-#'   returns records from the bounding box around it.
+#'   returns records from the bounding box around it. `NULL` returns the harmonised
+#'   records whole, in their source CRS, neither projected nor cropped -- for a caller
+#'   that subsets by its own geometry downstream rather than by one study area here.
 #' @param fire_years Integer vector of fire years to keep; `NULL` (default) keeps all years.
 #' @param min_size_ha Minimum fire size in hectares to keep (default `1`); records
 #'   with a smaller reported `SIZE_HA` are dropped, while records with a missing
@@ -882,9 +906,10 @@ fetch_nfdb_points <- function(
 #' Prefer NBAC ([fetch_nbac_polys()]); use NFDB polygons only to backfill years NBAC does not cover.
 #'
 #' CWFIS splits this record by year: the archive this fetches carries 1972 onward, and the earlier
-#' fires live in a separate one that `include_pre1972` adds. Those earlier perimeters are aerial
-#' sketches that overestimate burned area, so they are left out by default -- see
-#' [download_fire_records()].
+#' fires live in a separate one that `include_pre1972` adds. They are left out by default because
+#' they are the record's least reliable part -- wholly pre-satellite, where the mapping that has
+#' been checked against satellite imagery was found to run high (see [load_nbac_polys()] for the
+#' measured comparison). See [download_fire_records()].
 #'
 #' @inheritParams fetch_nfdb_points
 #' @inheritParams download_fire_records

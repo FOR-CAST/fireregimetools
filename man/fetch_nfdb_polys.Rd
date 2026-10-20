@@ -59,9 +59,10 @@ binds them. Caching, verification and concurrent-worker behaviour are as for \co
 Prefer NBAC (\code{\link[=fetch_nbac_polys]{fetch_nbac_polys()}}); use NFDB polygons only to backfill years NBAC does not cover.
 
 CWFIS splits this record by year: the archive this fetches carries 1972 onward, and the earlier
-fires live in a separate one that \code{include_pre1972} adds. Those earlier perimeters are aerial
-sketches that overestimate burned area, so they are left out by default -- see
-\code{\link[=download_fire_records]{download_fire_records()}}.
+fires live in a separate one that \code{include_pre1972} adds. They are left out by default because
+they are the record's least reliable part -- wholly pre-satellite, where the mapping that has
+been checked against satellite imagery was found to run high (see \code{\link[=load_nbac_polys]{load_nbac_polys()}} for the
+measured comparison). See \code{\link[=download_fire_records]{download_fire_records()}}.
 }
 \section{Spatial pre-filtering}{
 
