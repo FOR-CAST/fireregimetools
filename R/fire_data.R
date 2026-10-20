@@ -707,6 +707,127 @@ load_nfdb_points <- function(nfdb_shp, study_area, fire_years = NULL, min_size_h
   found
 }
 
+## The CWFIS archives this package knows how to fetch, in ONE place so that a URL or an extract
+## pattern cannot drift between the download-only and the download-and-load entry points.
+##
+## `dest_suffix` is non-empty only where an archive must NOT share a directory with another, and the
+## pre-1972 NFDB partition is the only such case. It is not cosmetic. The main NFDB polygon pattern
+## `NFDB_poly_.*\\.shp$` matches the pre-1972 shapefile too, and `.fire_archive_cached()` decides by
+## pattern before it checks the per-URL stamp -- so a directory holding only the pre-1972 extraction
+## would satisfy the MAIN archive's cache check, and the main record would silently never be fetched.
+## A SUBDIRECTORY of `dest` does not fix that: `.fire_archive_files()` prefers the top level but
+## falls back to a recursive search when nothing matches there, which reaches straight into it. A
+## SIBLING directory does, and it leaves an existing top-level cache of the main archive valid.
+.FIRE_RECORDS <- list(
+  nfdb_point = list(
+    url = "https://cwfis.cfs.nrcan.gc.ca/downloads/nfdb/fire_pnt/current_version/NFDB_point_shp.zip",
+    pattern = "NFDB_point.*\\.shp$",
+    dest_suffix = ""
+  ),
+  nfdb_poly = list(
+    url = "https://cwfis.cfs.nrcan.gc.ca/downloads/nfdb/fire_poly/current_version/NFDB_poly.zip",
+    pattern = "NFDB_poly_.*\\.shp$",
+    dest_suffix = ""
+  ),
+  nfdb_poly_pre1972 = list(
+    url = "https://cwfis.cfs.nrcan.gc.ca/downloads/nfdb/fire_poly/current_version/NFDB_poly_pre1972.zip",
+    pattern = "NFDB_poly_pre1972.*\\.shp$",
+    dest_suffix = "_pre1972"
+  ),
+  nbac_poly = list(
+    url = "https://cwfis.cfs.nrcan.gc.ca/downloads/nbac/NBAC_1972to2025_20260513_shp.zip",
+    pattern = "NBAC_.*\\.shp$",
+    dest_suffix = ""
+  )
+)
+
+#' Download a fire-record archive, without loading it
+#'
+#' Downloads and extracts one CWFIS fire-record archive and returns the extracted shapefile path(s),
+#' leaving the reading to [load_nfdb_points()], [load_nfdb_polys()] or [load_nbac_polys()]. The
+#' `fetch_*` functions do both in one call; this is the download half on its own, for a caller that
+#' caches the archive separately from the per-study-area load -- a `{targets}` `format = "file"`
+#' target, for instance, which tracks the extracted files and re-reads them per study area without
+#' re-fetching ~780 MB.
+#'
+#' Caching, locking, manifest verification and concurrent-worker behaviour are as for
+#' [fetch_nfdb_points()].
+#'
+#' @param record Which archive: `"nfdb_point"`, `"nfdb_poly"` or `"nbac_poly"`.
+#' @param dest Directory to download + extract into (created if needed). `NULL` (default) uses a
+#'   session tempdir named after `record`; point it at a persistent, ideally shared, location to
+#'   cache across runs.
+#' @param url Override the archive URL. `NULL` (default) uses the CWFIS archive for `record`.
+#' @param include_pre1972 Also fetch the separate pre-1972 NFDB polygon archive and return its
+#'   shapefile alongside the main one. Only valid for `record = "nfdb_poly"`, and **`FALSE` by
+#'   default on purpose**: CWFIS splits the polygon record, and the pre-1972 partition is aerial
+#'   sketches that OVERESTIMATE burned area (see [load_nbac_polys()]), so it should be opted into
+#'   deliberately for a study whose window needs those years, not inherited silently. NBAC is
+#'   unaffected -- the composite itself begins in 1972 -- and the NFDB *point* record is not split.
+#'   The second archive is cached in a SIBLING of `dest` (`paste0(dest, "_pre1972")`) rather than
+#'   inside it, because the main archive's extract pattern also matches a pre-1972 shapefile and
+#'   would otherwise accept it as its own cached extraction.
+#'
+#' @param pre1972_url Override the pre-1972 archive URL, as `url` does for the main one. `NULL`
+#'   (default) uses the CWFIS archive. Only consulted when `include_pre1972 = TRUE`.
+#'
+#' @returns Character vector of extracted shapefile paths, sorted.
+#'
+#' @seealso [fetch_nfdb_points()], [fetch_nfdb_polys()], [fetch_nbac_polys()]
+#' @family fire-record loaders
+#' @export
+download_fire_records <- function(
+  record,
+  dest = NULL,
+  url = NULL,
+  include_pre1972 = FALSE,
+  pre1972_url = NULL
+) {
+  record <- match.arg(record, c("nfdb_point", "nfdb_poly", "nbac_poly"))
+  if (isTRUE(include_pre1972) && !identical(record, "nfdb_poly")) {
+    stop(
+      "`include_pre1972` applies only to `record = \"nfdb_poly\"`; ",
+      "NBAC begins in 1972 and the NFDB point record is not split by year.",
+      call. = FALSE
+    )
+  }
+  spec <- .FIRE_RECORDS[[record]]
+  dest <- dest %||% file.path(tempdir(), record)
+  shp <- .download_fire_archive(url %||% spec$url, dest, pattern = spec$pattern)
+
+  ## Never let a pre-1972 shapefile stand in for the 1972-onward record. The main pattern matches
+  ## one, and `.fire_archive_files()` falls back to a RECURSIVE search when nothing matches at the
+  ## top of `dest`, so a stray pre-1972 extraction anywhere beneath it would otherwise be returned
+  ## as the main record -- silently handing back aerial-sketch perimeters for the wrong years. The
+  ## sibling cache directory keeps THIS function from creating that state; this keeps the function
+  ## honest if anything else does. Failing loudly is the point: there is no safe fallback.
+  if (identical(record, "nfdb_poly")) {
+    shp <- grep("pre1972", shp, invert = TRUE, value = TRUE)
+    if (!length(shp)) {
+      stop(
+        "no 1972-onward NFDB polygon shapefile in ",
+        dest,
+        ": the only matches were pre-1972 partitions, which are a separate archive. ",
+        "Use `include_pre1972 = TRUE` to request those deliberately.",
+        call. = FALSE
+      )
+    }
+  }
+
+  if (isTRUE(include_pre1972)) {
+    pre <- .FIRE_RECORDS$nfdb_poly_pre1972
+    shp <- c(
+      shp,
+      .download_fire_archive(
+        pre1972_url %||% pre$url,
+        paste0(dest, pre$dest_suffix),
+        pattern = pre$pattern
+      )
+    )
+  }
+  sort(unique(shp))
+}
+
 #' Download + load NFDB fire points, harmonised + clipped to a study area
 #'
 #' Downloads the Canadian National Fire Database (NFDB) fire-point archive from the CWFIS open-data
@@ -747,10 +868,7 @@ fetch_nfdb_points <- function(
   dest = file.path(tempdir(), "NFDB_point"),
   url = NULL
 ) {
-  if (is.null(url)) {
-    url <- "https://cwfis.cfs.nrcan.gc.ca/downloads/nfdb/fire_pnt/current_version/NFDB_point_shp.zip"
-  }
-  shp <- .download_fire_archive(url, dest, pattern = "NFDB_point.*\\.shp$")
+  shp <- download_fire_records("nfdb_point", dest = dest, url = url)
   load_nfdb_points(shp, study_area = study_area, fire_years = fire_years, min_size_ha = min_size_ha)
 }
 
@@ -763,7 +881,13 @@ fetch_nfdb_points <- function(
 #'
 #' Prefer NBAC ([fetch_nbac_polys()]); use NFDB polygons only to backfill years NBAC does not cover.
 #'
+#' CWFIS splits this record by year: the archive this fetches carries 1972 onward, and the earlier
+#' fires live in a separate one that `include_pre1972` adds. Those earlier perimeters are aerial
+#' sketches that overestimate burned area, so they are left out by default -- see
+#' [download_fire_records()].
+#'
 #' @inheritParams fetch_nfdb_points
+#' @inheritParams download_fire_records
 #' @param url URL of the NFDB polygon shapefile archive (zip). `NULL` (default) uses the CWFIS
 #'   current-version archive.
 #'
@@ -778,12 +902,17 @@ fetch_nfdb_polys <- function(
   fire_years = NULL,
   min_size_ha = 1,
   dest = file.path(tempdir(), "NFDB_poly"),
-  url = NULL
+  url = NULL,
+  include_pre1972 = FALSE,
+  pre1972_url = NULL
 ) {
-  if (is.null(url)) {
-    url <- "https://cwfis.cfs.nrcan.gc.ca/downloads/nfdb/fire_poly/current_version/NFDB_poly.zip"
-  }
-  shp <- .download_fire_archive(url, dest, pattern = "NFDB_poly_.*\\.shp$")
+  shp <- download_fire_records(
+    "nfdb_poly",
+    dest = dest,
+    url = url,
+    include_pre1972 = include_pre1972,
+    pre1972_url = pre1972_url
+  )
   load_nfdb_polys(shp, study_area = study_area, fire_years = fire_years, min_size_ha = min_size_ha)
 }
 
@@ -816,9 +945,6 @@ fetch_nbac_polys <- function(
   dest = file.path(tempdir(), "NBAC"),
   url = NULL
 ) {
-  if (is.null(url)) {
-    url <- "https://cwfis.cfs.nrcan.gc.ca/downloads/nbac/NBAC_1972to2025_20260513_shp.zip"
-  }
-  shp <- .download_fire_archive(url, dest, pattern = "NBAC_.*\\.shp$")
+  shp <- download_fire_records("nbac_poly", dest = dest, url = url)
   load_nbac_polys(shp, study_area = study_area, fire_years = fire_years, min_size_ha = min_size_ha)
 }

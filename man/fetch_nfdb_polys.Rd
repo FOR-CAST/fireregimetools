@@ -9,7 +9,9 @@ fetch_nfdb_polys(
   fire_years = NULL,
   min_size_ha = 1,
   dest = file.path(tempdir(), "NFDB_poly"),
-  url = NULL
+  url = NULL,
+  include_pre1972 = FALSE,
+  pre1972_url = NULL
 )
 }
 \arguments{
@@ -30,6 +32,19 @@ session tempdir; point it at a persistent (ideally shared) location to cache acr
 
 \item{url}{URL of the NFDB polygon shapefile archive (zip). \code{NULL} (default) uses the CWFIS
 current-version archive.}
+
+\item{include_pre1972}{Also fetch the separate pre-1972 NFDB polygon archive and return its
+shapefile alongside the main one. Only valid for \code{record = "nfdb_poly"}, and \strong{\code{FALSE} by
+default on purpose}: CWFIS splits the polygon record, and the pre-1972 partition is aerial
+sketches that OVERESTIMATE burned area (see \code{\link[=load_nbac_polys]{load_nbac_polys()}}), so it should be opted into
+deliberately for a study whose window needs those years, not inherited silently. NBAC is
+unaffected -- the composite itself begins in 1972 -- and the NFDB \emph{point} record is not split.
+The second archive is cached in a SIBLING of \code{dest} (\code{paste0(dest, "_pre1972")}) rather than
+inside it, because the main archive's extract pattern also matches a pre-1972 shapefile and
+would otherwise accept it as its own cached extraction.}
+
+\item{pre1972_url}{Override the pre-1972 archive URL, as \code{url} does for the main one. \code{NULL}
+(default) uses the CWFIS archive. Only consulted when \code{include_pre1972 = TRUE}.}
 }
 \value{
 A \code{SpatVector} of NFDB polygons cropped to \code{study_area}, as \code{\link[=load_nfdb_polys]{load_nfdb_polys()}}.
@@ -42,6 +57,11 @@ binds them. Caching, verification and concurrent-worker behaviour are as for \co
 }
 \details{
 Prefer NBAC (\code{\link[=fetch_nbac_polys]{fetch_nbac_polys()}}); use NFDB polygons only to backfill years NBAC does not cover.
+
+CWFIS splits this record by year: the archive this fetches carries 1972 onward, and the earlier
+fires live in a separate one that \code{include_pre1972} adds. Those earlier perimeters are aerial
+sketches that overestimate burned area, so they are left out by default -- see
+\code{\link[=download_fire_records]{download_fire_records()}}.
 }
 \section{Spatial pre-filtering}{
 
@@ -64,6 +84,7 @@ regardless; the records returned are the same, they just take longer to arrive.
 \code{\link[=load_nfdb_polys]{load_nfdb_polys()}}
 
 Other fire-record loaders:
+\code{\link[=download_fire_records]{download_fire_records()}},
 \code{\link[=fetch_nbac_polys]{fetch_nbac_polys()}},
 \code{\link[=fetch_nfdb_points]{fetch_nfdb_points()}},
 \code{\link[=load_nbac_polys]{load_nbac_polys()}},

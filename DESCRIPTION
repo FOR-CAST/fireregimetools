@@ -1,6 +1,6 @@
 Package: fireregimetools
 Title: Tools for Summarizing Fire Regime Statistics From Simulations
-Version: 0.1.0.9008
+Version: 0.1.0.9009
 Authors@R:
     person(c("Alex", "M"), "Chubaty", , "achubaty@for-cast.ca", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0001-7146-8135"))
@@ -14,7 +14,7 @@ License: Apache License (>= 2)
 URL: https://github.com/FOR-CAST/fireregimetools
 BugReports: https://github.com/FOR-CAST/fireregimetools/issues
 Depends:
-    R (>= 4.1)
+    R (>= 4.4)
 Imports:
     arrow,
     dplyr,

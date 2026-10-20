@@ -706,3 +706,155 @@ test_that("a source that cannot be pre-filtered is read whole, and says so", {
   expect_snapshot(v <- .read_fire_source(f, terra::vect("POINT (10 10)", crs = "EPSG:3005")))
   expect_equal(nrow(v), 2L)
 })
+
+## --- download_fire_records(): the download half alone, and the pre-1972 split -------------------
+
+## a pre-1972 NFDB polygon partition, which CWFIS ships in a SEPARATE archive from 1972-onward
+write_pre1972_partition <- function(dir) {
+  p <- sq(0, 120)
+  p$YEAR <- 1965L
+  p$SIZE_HA <- 11
+  terra::writeVector(p, file.path(dir, "NFDB_poly_pre1972_20250630.shp"), overwrite = TRUE)
+  invisible(dir)
+}
+
+test_that("download_fire_records() returns extracted paths without loading or downloading", {
+  dest <- withr::local_tempdir()
+  write_poly_partitions(dest)
+
+  ## already extracted, so this must not touch `url` (which is unreachable)
+  out <- download_fire_records(
+    "nfdb_poly",
+    dest = dest,
+    url = "https://example.invalid/NFDB_poly.zip"
+  )
+  expect_type(out, "character")
+  expect_length(out, 2L)
+  expect_true(all(grepl("\\.shp$", out)))
+})
+
+test_that("the pre-1972 archive is not requested by default", {
+  dest <- withr::local_tempdir()
+  write_poly_partitions(dest)
+
+  ## the pre-1972 URL is unreachable too, so succeeding at all proves it was never requested
+  out <- download_fire_records(
+    "nfdb_poly",
+    dest = dest,
+    url = "https://example.invalid/NFDB_poly.zip"
+  )
+  expect_false(any(grepl("pre1972", out)))
+  expect_false(dir.exists(paste0(dest, "_pre1972")))
+})
+
+test_that("include_pre1972 = TRUE returns the earlier partition alongside the 1972-onward ones", {
+  dest <- withr::local_tempdir()
+  write_poly_partitions(dest)
+  pre <- paste0(dest, "_pre1972")
+  dir.create(pre)
+  withr::defer(unlink(pre, recursive = TRUE))
+  write_pre1972_partition(pre)
+
+  out <- download_fire_records(
+    "nfdb_poly",
+    dest = dest,
+    url = "https://example.invalid/NFDB_poly.zip",
+    include_pre1972 = TRUE,
+    pre1972_url = "https://example.invalid/NFDB_poly_pre1972.zip"
+  )
+  expect_length(out, 3L)
+  expect_length(grep("pre1972", out), 1L)
+})
+
+test_that("a stray pre-1972 shapefile under dest cannot stand in for the 1972-onward record", {
+  ## The hazard is independent of where this function chooses to cache. The main pattern
+  ## `NFDB_poly_.*\\.shp$` matches a pre-1972 shapefile, and `.fire_archive_files()` falls back to a
+  ## RECURSIVE search when nothing matches at the top of `dest` -- so a pre-1972 extraction anywhere
+  ## beneath `dest` would be returned as the 1972-onward record, silently substituting aerial-sketch
+  ## perimeters for the wrong years. Build exactly that state and require a loud failure.
+  dest <- withr::local_tempdir()
+  sub <- file.path(dest, "pre1972")
+  dir.create(sub)
+  write_pre1972_partition(sub)
+
+  expect_error(
+    suppressWarnings(
+      download_fire_records(
+        "nfdb_poly",
+        dest = dest,
+        url = "https://example.invalid/NFDB_poly.zip"
+      )
+    ),
+    "no 1972-onward NFDB polygon shapefile"
+  )
+})
+
+test_that("include_pre1972 is rejected for records that have no pre-1972 split", {
+  expect_snapshot(
+    error = TRUE,
+    download_fire_records("nbac_poly", dest = tempdir(), include_pre1972 = TRUE)
+  )
+  expect_snapshot(
+    error = TRUE,
+    download_fire_records("nfdb_point", dest = tempdir(), include_pre1972 = TRUE)
+  )
+})
+
+test_that("fetch_nfdb_polys() binds the pre-1972 partition when asked", {
+  dest <- withr::local_tempdir()
+  write_poly_partitions(dest)
+  pre <- paste0(dest, "_pre1972")
+  dir.create(pre)
+  withr::defer(unlink(pre, recursive = TRUE))
+  write_pre1972_partition(pre)
+
+  without <- fetch_nfdb_polys(
+    make_sa_vect(),
+    dest = dest,
+    url = "https://example.invalid/NFDB_poly.zip"
+  )
+  with <- fetch_nfdb_polys(
+    make_sa_vect(),
+    dest = dest,
+    url = "https://example.invalid/NFDB_poly.zip",
+    include_pre1972 = TRUE,
+    pre1972_url = "https://example.invalid/NFDB_poly_pre1972.zip"
+  )
+  expect_setequal(without$YEAR, c(1985L, 2022L))
+  expect_setequal(with$YEAR, c(1965L, 1985L, 2022L))
+})
+
+test_that("a single-file NFDB release is read whole, pre-1972 records included", {
+  ## A downstream consumer (LandWeb) reads the 2021 release `NFDB_poly_20210707`: ONE shapefile
+  ## spanning 1917-2020, with ~18k polygons before 1972. `include_pre1972` governs whether the
+  ## SEPARATE pre-1972 archive is fetched; it must never filter years out of whatever the main
+  ## archive already contains, and the pre-1972 exclusion guard works on file paths, not records.
+  dest <- withr::local_tempdir()
+  old <- sq(0, 0)
+  old$YEAR <- 1950L
+  old$SIZE_HA <- 7
+  recent <- sq(120, 0)
+  recent$YEAR <- 1990L
+  recent$SIZE_HA <- 9
+  terra::writeVector(
+    rbind(old, recent),
+    file.path(dest, "NFDB_poly_20210707.shp"),
+    overwrite = TRUE
+  )
+
+  out <- fetch_nfdb_polys(
+    make_sa_vect(),
+    dest = dest,
+    url = "https://example.invalid/NFDB_poly.zip"
+  )
+  expect_setequal(out$YEAR, c(1950L, 1990L))
+
+  ## and the guard still does not mistake that file for a pre-1972 partition
+  paths <- download_fire_records(
+    "nfdb_poly",
+    dest = dest,
+    url = "https://example.invalid/NFDB_poly.zip"
+  )
+  expect_length(paths, 1L)
+  expect_match(basename(paths), "^NFDB_poly_20210707\\.shp$")
+})

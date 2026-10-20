@@ -68,6 +68,7 @@ regardless; the records returned are the same, they just take longer to arrive.
 \code{\link[=load_nfdb_points]{load_nfdb_points()}}
 
 Other fire-record loaders:
+\code{\link[=download_fire_records]{download_fire_records()}},
 \code{\link[=fetch_nbac_polys]{fetch_nbac_polys()}},
 \code{\link[=fetch_nfdb_polys]{fetch_nfdb_polys()}},
 \code{\link[=load_nbac_polys]{load_nbac_polys()}},
