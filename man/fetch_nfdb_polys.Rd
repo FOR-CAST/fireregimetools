@@ -35,9 +35,10 @@ current-version archive.}
 
 \item{include_pre1972}{Also fetch the separate pre-1972 NFDB polygon archive and return its
 shapefile alongside the main one. Only valid for \code{record = "nfdb_poly"}, and \strong{\code{FALSE} by
-default on purpose}: CWFIS splits the polygon record, and the pre-1972 partition is aerial
-sketches that OVERESTIMATE burned area (see \code{\link[=load_nbac_polys]{load_nbac_polys()}}), so it should be opted into
-deliberately for a study whose window needs those years, not inherited silently. NBAC is
+default on purpose}: CWFIS splits the polygon record, and the pre-1972 partition was mapped
+largely by conventional methods such as sketch mapping, which overestimate area burned (Skakun
+et al. 2021, \doi{10.1088/1748-9326/abfb2c}; see \code{\link[=load_nbac_polys]{load_nbac_polys()}}), so it should be opted
+into deliberately for a study whose window needs those years, not inherited silently. NBAC is
 unaffected -- the composite itself begins in 1972 -- and the NFDB \emph{point} record is not split.
 The second archive is cached in a SIBLING of \code{dest} (\code{paste0(dest, "_pre1972")}) rather than
 inside it, because the main archive's extract pattern also matches a pre-1972 shapefile and
