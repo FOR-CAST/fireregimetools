@@ -1,3 +1,5 @@
+# fireregimetools (development version)
+
 # fireregimetools 0.1.1
 
 - `filter_fire_records()` keeps the fire records of the given cause groups and drops prescribed burns, the records a fire model is compared with. `fire_cause_group()` and `is_prescribed_burn()` are the two tests it applies. The groups (natural, human, unknown, other) cover the cause values of NBAC (`FIRECAUS`) and of each NFDB release (`CAUSE`, and from the 2026 points `CAUSE2`), including NFDB's `n/a` and `Re`; a value outside them is an error. The loaders already keep these columns.
