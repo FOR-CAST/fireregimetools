@@ -1,5 +1,7 @@
 # fireregimetools (development version)
 
+- `load_nbac_polys()` now describes `ADJ_HA`, the source of `SIZE_HA`, correctly: it is NBAC's modelled area for conventional agency perimeters (sketch maps, GPS traverses, buffered points), from the area-burned adjustment models of Skakun et al. (2021, doi:10.1088/1748-9326/abfb2c), and equals the polygon area elsewhere (in the 20260513 release). It is not, as the documentation said, the area burned net of unburned islands and water; NBAC removes those from the polygons themselves, as holes. The documentation also says that NBAC's own columns, such as `NFIREID`, are kept.
+
 # fireregimetools 0.1.1
 
 - `filter_fire_records()` keeps the fire records of the given cause groups and drops prescribed burns, the records a fire model is compared with. `fire_cause_group()` and `is_prescribed_burn()` are the two tests it applies. The groups (natural, human, unknown, other) cover the cause values of NBAC (`FIRECAUS`) and of each NFDB release (`CAUSE`, and from the 2026 points `CAUSE2`), including NFDB's `n/a` and `Re`; a value outside them is an error. The loaders already keep these columns.

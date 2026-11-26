@@ -283,13 +283,26 @@
 #'
 #' Loads National Burned Area Composite (NBAC) fire perimeters and harmonises them
 #' to a common `YEAR` + `SIZE_HA` schema: `YEAR` from the NBAC year field and
-#' `SIZE_HA` from the adjusted burned area (NBAC's canonical burned-area figure,
-#' excluding unburned islands/interior water). Both columns are detected tolerantly
-#' (year: `YEAR` or `FIRE_YEAR`; area: `ADJ_HA`, `POLY_HA`, or `HECTARES`) across
-#' NBAC vintages. Invalid geometries are repaired with
+#' `SIZE_HA` from NBAC's adjusted area burned, `ADJ_HA`. Both columns are detected
+#' tolerantly (year: `YEAR` or `FIRE_YEAR`; area: `ADJ_HA`, `POLY_HA`, or
+#' `HECTARES`) across NBAC vintages. Invalid geometries are repaired with
 #' [spatialutils::repair_geoms()] (only the invalid subset is passed to
 #' `terra::makeValid()`, for speed), records are filtered to `fire_years` and
-#' `SIZE_HA >= min_size_ha`, then projected + cropped to `study_area`.
+#' `SIZE_HA >= min_size_ha`, then projected + cropped to `study_area`. NBAC's other
+#' columns are kept, among them `NFIREID`, the fire ID that the polygons of a fire
+#' split at a provincial, territorial or national park boundary share in a year.
+#'
+#' `ADJ_HA` is a modelled area, not the area burned net of unburned islands. NBAC's
+#' metadata describe it as "an adjusted area burn" from the area-burned adjustment
+#' models of Skakun et al. (2021, \doi{10.1088/1748-9326/abfb2c}), applied to
+#' conventional agency perimeters (sketch maps, GPS traverses and buffered points)
+#' and flagged by `ADJ_FLAG` (NBAC 1972-2025 metadata,
+#' \url{https://cwfis.cfs.nrcan.gc.ca/downloads/nbac/NBAC_1972to2025_20260513_shp_metadata.pdf}).
+#' The models predict, from a conventional perimeter's area, the area a Landsat
+#' delineation of the fire would give; they correct the overestimate of a whole
+#' perimeter and map no islands. In the 20260513 release `ADJ_HA` equals the polygon
+#' area, `POLY_HA`, wherever `ADJ_FLAG` is not set. Where NBAC removes unburned
+#' islands and water, it removes them from the geometry, as holes in the polygon.
 #'
 #' Perimeters straddling the study-area boundary are clipped, so their geometry is
 #' truncated while `SIZE_HA` keeps the full reported fire size. Sum `SIZE_HA` for
@@ -301,14 +314,15 @@
 #' documentation claims no accuracy, saying only that "data accuracy varies due to
 #' different mapping techniques" and that "data completeness and quality vary among
 #' agencies and between years" (Canadian Forest Service 2021). The comparison has
-#' been quantified elsewhere: NBAC removes unburned islands and interior water,
-#' which agency perimeters do inconsistently (Hall et al. 2020,
-#' \doi{10.1071/WF19201}), and CNFDB annual burned-area estimates carry confidence
-#' intervals roughly three times the width of NBAC's, with retroactive Landsat
-#' mapping of Northwest Territories fires cutting the historical estimate by 3 Mha
-#' (16%) -- the least reliable tier of that record being largely aerial survey
-#' (Skakun et al. 2022, \doi{10.3390/rs14133050}). Use [load_nfdb_polys()] only to
-#' backfill years NBAC does not cover.
+#' been quantified elsewhere: NBAC's Landsat mapping leaves unburned forest islands
+#' and water out of its polygons, which agency perimeters do inconsistently, and in
+#' 2004-2016 the polygons with unburned forest or water removed held about 90% of
+#' NBAC's burned area (Hall et al. 2020, \doi{10.1071/WF19201}); CNFDB annual
+#' burned-area estimates carry confidence intervals roughly three times the width
+#' of NBAC's, with retroactive Landsat mapping of Northwest Territories fires cutting
+#' the historical estimate by 3 Mha (16%) -- the least reliable tier of that record
+#' being largely aerial survey (Skakun et al. 2022, \doi{10.3390/rs14133050}). Use
+#' [load_nfdb_polys()] only to backfill years NBAC does not cover.
 #'
 #' @param nbac_shp Path(s) to the NBAC polygon shapefile(s).
 #' @param study_area Study area defining the output CRS + crop extent: a file path
@@ -325,7 +339,8 @@
 #'   (`NA`) size are always kept.
 #'
 #' @returns A `SpatVector` of NBAC perimeters cropped to `study_area`, in its CRS,
-#'   carrying harmonised integer `YEAR` + numeric `SIZE_HA` columns.
+#'   carrying harmonised integer `YEAR` + numeric `SIZE_HA` columns beside NBAC's own
+#'   columns (e.g. `NFIREID`, `FIRECAUS`).
 #'
 #' @section Spatial pre-filtering:
 #' The study-area filter is pushed down to the GDAL/OGR read, so only records near

@@ -33,6 +33,20 @@ test_that("load_nbac_polys() tolerates alternate year/size columns + filters fir
   expect_equal(out$SIZE_HA, 50)
 })
 
+test_that("load_nbac_polys() keeps NBAC's own columns, such as NFIREID", {
+  ## one fire split at a jurisdiction boundary: two polygons sharing an NFIREID, as burnSummaries counts it
+  nbac <- rbind(sq(0, 0), sq(120, 0))
+  nbac$YEAR <- 2010L
+  nbac$NFIREID <- c(433, 433)
+  nbac$ADJ_HA <- c(50, 20)
+  f <- withr::local_tempfile(fileext = ".gpkg")
+  terra::writeVector(nbac, f, overwrite = TRUE)
+
+  out <- load_nbac_polys(f, make_sa_vect())
+  expect_equal(out$NFIREID, c(433, 433))
+  expect_equal(out$SIZE_HA, c(50, 20))
+})
+
 test_that("study_area may be a SpatRaster (e.g. a flammableMap)", {
   nbac <- sq(0, 0)
   nbac$YEAR <- 2005L

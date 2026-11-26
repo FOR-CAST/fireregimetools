@@ -26,20 +26,34 @@ with a smaller reported \code{SIZE_HA} are dropped, while records with a missing
 }
 \value{
 A \code{SpatVector} of NBAC perimeters cropped to \code{study_area}, in its CRS,
-carrying harmonised integer \code{YEAR} + numeric \code{SIZE_HA} columns.
+carrying harmonised integer \code{YEAR} + numeric \code{SIZE_HA} columns beside NBAC's own
+columns (e.g. \code{NFIREID}, \code{FIRECAUS}).
 }
 \description{
 Loads National Burned Area Composite (NBAC) fire perimeters and harmonises them
 to a common \code{YEAR} + \code{SIZE_HA} schema: \code{YEAR} from the NBAC year field and
-\code{SIZE_HA} from the adjusted burned area (NBAC's canonical burned-area figure,
-excluding unburned islands/interior water). Both columns are detected tolerantly
-(year: \code{YEAR} or \code{FIRE_YEAR}; area: \code{ADJ_HA}, \code{POLY_HA}, or \code{HECTARES}) across
-NBAC vintages. Invalid geometries are repaired with
+\code{SIZE_HA} from NBAC's adjusted area burned, \code{ADJ_HA}. Both columns are detected
+tolerantly (year: \code{YEAR} or \code{FIRE_YEAR}; area: \code{ADJ_HA}, \code{POLY_HA}, or
+\code{HECTARES}) across NBAC vintages. Invalid geometries are repaired with
 \code{\link[spatialutils:repair_geoms]{spatialutils::repair_geoms()}} (only the invalid subset is passed to
 \code{terra::makeValid()}, for speed), records are filtered to \code{fire_years} and
-\code{SIZE_HA >= min_size_ha}, then projected + cropped to \code{study_area}.
+\code{SIZE_HA >= min_size_ha}, then projected + cropped to \code{study_area}. NBAC's other
+columns are kept, among them \code{NFIREID}, the fire ID that the polygons of a fire
+split at a provincial, territorial or national park boundary share in a year.
 }
 \details{
+\code{ADJ_HA} is a modelled area, not the area burned net of unburned islands. NBAC's
+metadata describe it as "an adjusted area burn" from the area-burned adjustment
+models of Skakun et al. (2021, \doi{10.1088/1748-9326/abfb2c}), applied to
+conventional agency perimeters (sketch maps, GPS traverses and buffered points)
+and flagged by \code{ADJ_FLAG} (NBAC 1972-2025 metadata,
+\url{https://cwfis.cfs.nrcan.gc.ca/downloads/nbac/NBAC_1972to2025_20260513_shp_metadata.pdf}).
+The models predict, from a conventional perimeter's area, the area a Landsat
+delineation of the fire would give; they correct the overestimate of a whole
+perimeter and map no islands. In the 20260513 release \code{ADJ_HA} equals the polygon
+area, \code{POLY_HA}, wherever \code{ADJ_FLAG} is not set. Where NBAC removes unburned
+islands and water, it removes them from the geometry, as holes in the polygon.
+
 Perimeters straddling the study-area boundary are clipped, so their geometry is
 truncated while \code{SIZE_HA} keeps the full reported fire size. Sum \code{SIZE_HA} for
 "fires that reached this study area"; use \code{\link[terra:expanse]{terra::expanse()}} for "area burned
@@ -50,14 +64,15 @@ NBAC perimeters are satellite-derived (best-available delineation) and span
 documentation claims no accuracy, saying only that "data accuracy varies due to
 different mapping techniques" and that "data completeness and quality vary among
 agencies and between years" (Canadian Forest Service 2021). The comparison has
-been quantified elsewhere: NBAC removes unburned islands and interior water,
-which agency perimeters do inconsistently (Hall et al. 2020,
-\doi{10.1071/WF19201}), and CNFDB annual burned-area estimates carry confidence
-intervals roughly three times the width of NBAC's, with retroactive Landsat
-mapping of Northwest Territories fires cutting the historical estimate by 3 Mha
-(16\%) -- the least reliable tier of that record being largely aerial survey
-(Skakun et al. 2022, \doi{10.3390/rs14133050}). Use \code{\link[=load_nfdb_polys]{load_nfdb_polys()}} only to
-backfill years NBAC does not cover.
+been quantified elsewhere: NBAC's Landsat mapping leaves unburned forest islands
+and water out of its polygons, which agency perimeters do inconsistently, and in
+2004-2016 the polygons with unburned forest or water removed held about 90\% of
+NBAC's burned area (Hall et al. 2020, \doi{10.1071/WF19201}); CNFDB annual
+burned-area estimates carry confidence intervals roughly three times the width
+of NBAC's, with retroactive Landsat mapping of Northwest Territories fires cutting
+the historical estimate by 3 Mha (16\%) -- the least reliable tier of that record
+being largely aerial survey (Skakun et al. 2022, \doi{10.3390/rs14133050}). Use
+\code{\link[=load_nfdb_polys]{load_nfdb_polys()}} only to backfill years NBAC does not cover.
 }
 \section{Spatial pre-filtering}{
 
