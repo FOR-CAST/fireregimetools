@@ -59,15 +59,28 @@ truncated while \code{SIZE_HA} keeps the full reported fire size. Sum \code{SIZE
 "fires that reached this study area"; use \code{\link[terra:expanse]{terra::expanse()}} for "area burned
 inside it" -- the two differ for every edge fire.
 
-NBAC perimeters are satellite-derived (best-available delineation) and span
-1972-present; they are preferred over the NFDB polygon record. The NFDB's own
-documentation claims no accuracy, saying only that "data accuracy varies due to
-different mapping techniques" and that "data completeness and quality vary among
-agencies and between years" (Canadian Forest Service 2021). The comparison has
-been quantified elsewhere: NBAC's Landsat mapping leaves unburned forest islands
-and water out of its polygons, which agency perimeters do inconsistently, and in
-2004-2016 the polygons with unburned forest or water removed held about 90\% of
-NBAC's burned area (Hall et al. 2020, \doi{10.1071/WF19201}); CNFDB annual
+NBAC spans 1972-present and is preferred over the NFDB polygon record. It
+combines burned areas that the Canadian Forest Service maps from satellite
+imagery with the perimeters of fire management agencies. For each fire it keeps
+one source: in general its own Landsat mapping (the Multi-Acquisition Fire
+Mapping System, MAFiMS) where there is one, then the agency's perimeter
+(Hall et al. 2020, p. 883, \doi{10.1071/WF19201}). Each feature records its
+source (NBAC 1972-2025 metadata). \code{BASRC} is the burned-area product: \code{"MAFiMS"}, \code{"C2C"}
+(Composite to Change) or \code{"TFMS"} (Tundra Fire Mapping System) for the
+satellite mapping, and \code{"Agency"} for a provincial, territorial or Parks Canada
+perimeter. \code{FIREMAPS} is the data source or platform (e.g. \code{"Landsat"},
+\code{"Sentinel-2"}, \code{"Aerial survey"}), and \code{FIREMAPM} the delineation method (e.g.
+\code{"Processed imagery"}, \code{"Manually delineated"}, \code{"Direct from GPS"}). In the
+20260513 release, \code{"Agency"} perimeters are 61\% of the features but 12\% of the
+area (\code{POLY_HA}).
+
+The NFDB's own documentation claims no accuracy, saying only that "data accuracy
+varies due to different mapping techniques" and that "data completeness and
+quality vary among agencies and between years" (Canadian Forest Service 2021).
+The comparison has been quantified elsewhere: NBAC's Landsat mapping leaves
+unburned forest islands and water out of its polygons, which agency perimeters do
+inconsistently, and in 2004-2016 the polygons with unburned forest or water
+removed held about 90\% of NBAC's burned area (Hall et al. 2020, p. 885); CNFDB annual
 burned-area estimates carry confidence intervals roughly three times the width
 of NBAC's, with retroactive Landsat mapping of Northwest Territories fires cutting
 the historical estimate by 3 Mha (16\%) -- the least reliable tier of that record

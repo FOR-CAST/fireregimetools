@@ -1,6 +1,7 @@
 # fireregimetools (development version)
 
 - `load_nbac_polys()` now describes `ADJ_HA`, the source of `SIZE_HA`, correctly: it is NBAC's modelled area for conventional agency perimeters (sketch maps, GPS traverses, buffered points), from the area-burned adjustment models of Skakun et al. (2021, doi:10.1088/1748-9326/abfb2c), and equals the polygon area elsewhere (in the 20260513 release). It is not, as the documentation said, the area burned net of unburned islands and water; NBAC removes those from the polygons themselves, as holes. The documentation also says that NBAC's own columns, such as `NFIREID`, are kept.
+- `load_nbac_polys()` no longer calls NBAC perimeters satellite-derived. NBAC combines the Canadian Forest Service's satellite mapping (`BASRC` `"MAFiMS"`, `"C2C"`, `"TFMS"`) with agency perimeters (`"Agency"`, 61% of the features and 12% of the area in the 20260513 release), keeping one source per fire (Hall et al. 2020, doi:10.1071/WF19201). The documentation now names the fields that record each feature's source: `BASRC`, `FIREMAPS` and `FIREMAPM`.
 
 # fireregimetools 0.1.1
 
