@@ -22,7 +22,8 @@ draws the fire-size distribution.
 ## Installation
 
 ```r
-renv::install("FOR-CAST/fireregimetools")
+# install.packages("pak")
+pak::pak("FOR-CAST/fireregimetools")
 ```
 
 ## License
