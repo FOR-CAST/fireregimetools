@@ -1,0 +1,36 @@
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+
+name: test-coverage
+
+jobs:
+  test-coverage:
+    runs-on: ubuntu-latest
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      ## Codecov refuses tokenless uploads to a protected branch; it is empty in Dependabot's runs
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::covr
+
+      - name: Test coverage
+        run: |
+          ## Dependabot's runs get no Actions secrets: test under covr, upload only with a token
+          cov <- covr::package_coverage()
+          if (nzchar(Sys.getenv("CODECOV_TOKEN"))) covr::codecov(coverage = cov) else print(cov)
+        shell: Rscript {0}
