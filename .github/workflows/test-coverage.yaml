@@ -31,6 +31,24 @@ jobs:
       - name: Test coverage
         run: |
           ## Dependabot's runs get no Actions secrets: test under covr, upload only with a token
-          cov <- covr::package_coverage()
+          cov <- covr::package_coverage(
+            quiet = FALSE,
+            clean = FALSE,
+            install_path = file.path(normalizePath(Sys.getenv("RUNNER_TEMP"), winslash = "/"), "package")
+          )
           if (nzchar(Sys.getenv("CODECOV_TOKEN"))) covr::codecov(coverage = cov) else print(cov)
         shell: Rscript {0}
+
+      - name: Show testthat output
+        if: always()
+        run: |
+          ## --------------------------------------------------------------------
+          find '${{ runner.temp }}/package' -name 'testthat.Rout*' -exec cat '{}' \; || true
+        shell: bash
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-test-failures
+          path: ${{ runner.temp }}/package
